@@ -8,7 +8,8 @@ __pycache__/
 
 # Node
 node_modules/
-dist/
+# Comment out dist/ so the built frontend is included in deployment
+# dist/ is only excluded for local dev
 
 # Playwright browsers
 .browsers/
