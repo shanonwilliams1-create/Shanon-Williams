@@ -3,7 +3,7 @@
  */
 import React, { useState, useEffect } from 'react';
 import { Check, Zap, Star } from 'lucide-react';
-import { subscriptionsAPI } from '../../services/api';
+import { subscriptionsAPI } from '../services/api';
 
 const tierIcons = { starter: Zap, pro: Zap, elite: Star };
 
