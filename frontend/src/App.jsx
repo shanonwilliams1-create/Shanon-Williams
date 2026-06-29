@@ -5,6 +5,7 @@ import LandingPage from './pages/LandingPage';
 import LoginForm from './pages/auth/LoginForm';
 import SignUpForm from './pages/auth/SignUpForm';
 import ForgotPassword from './pages/auth/ForgotPassword';
+import ResetPassword from './pages/auth/ResetPassword';
 import DashboardLayout from './pages/dashboard/DashboardLayout';
 import LeadList from './pages/dashboard/LeadList';
 import LeadDetail from './pages/dashboard/LeadDetail';
@@ -25,6 +26,7 @@ function App() {
         <Route path="/auth/login" element={<LoginForm />} />
         <Route path="/auth/signup" element={<SignUpForm />} />
         <Route path="/auth/forgot-password" element={<ForgotPassword />} />
+        <Route path="/auth/reset-password" element={<ResetPassword />} />
         
         <Route path="/dashboard" element={<DashboardLayout />}>
           <Route index element={<LeadList />} />

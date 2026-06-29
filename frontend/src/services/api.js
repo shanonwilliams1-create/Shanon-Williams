@@ -36,6 +36,7 @@ export const authAPI = {
   login: (data) => api.post('/auth/login', data),
   refresh: (token) => api.post('/auth/refresh', { refresh_token: token }),
   forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
+  resetPassword: (email, newPassword) => api.post('/auth/reset-password', { email, new_password: newPassword }),
 };
 
 // ── Leads ─────────────────────────────────────────────────────────────

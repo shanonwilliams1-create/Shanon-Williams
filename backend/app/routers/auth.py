@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import LoginRequest, SignupRequest, Token, PasswordResetRequest
+from app.schemas.auth import LoginRequest, SignupRequest, Token, PasswordResetRequest, DirectResetPassword
 from app.services.auth_service import (
     hash_password, verify_password, create_access_token, create_refresh_token, decode_token
 )
@@ -115,3 +115,27 @@ async def forgot_password(request: PasswordResetRequest, db: AsyncSession = Depe
     """
     # Just return success even if user doesn't exist for security
     return {"message": "If the email exists, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+async def reset_password(request: DirectResetPassword, db: AsyncSession = Depends(get_db)):
+    """
+    Direct password reset (no email needed).
+    Finds user by email and updates password directly.
+    """
+    result = await db.execute(select(User).where(User.email == request.email))
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with that email address"
+        )
+    
+    if not user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    
+    user.password_hash = hash_password(request.new_password)
+    await db.flush()
+    
+    return {"message": "Password reset successfully. You can now sign in with your new password."}

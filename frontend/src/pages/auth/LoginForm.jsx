@@ -55,7 +55,7 @@ export default function LoginForm() {
             Sign In
           </button>
           <div className="text-center text-sm text-gray-400">
-            <Link to="/auth/forgot-password" className="hover:text-indigo-400">Forgot password?</Link>
+            <Link to="/auth/reset-password" className="hover:text-indigo-400">Forgot password?</Link>
           </div>
           <div className="text-center text-sm text-gray-400">
             Don't have an account? <Link to="/auth/signup" className="text-indigo-400 hover:underline">Sign up</Link>
