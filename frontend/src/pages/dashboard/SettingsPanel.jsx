@@ -8,7 +8,8 @@ import { usersAPI } from '../../services/api';
 const TIER_ZIP_LIMITS = { starter: 1, pro: 5, elite: 999 };
 const ALL_TRADES = [
   'electrician', 'plumber', 'carpenter', 'roofer',
-  'landscaper', 'painter', 'general', 'hvac', 'other',
+  'landscaper', 'painter', 'general', 'hvac',
+  'demolition', 'cabinets', 'countertops', 'other',
 ];
 
 export default function SettingsPanel() {

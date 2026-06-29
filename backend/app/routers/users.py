@@ -52,7 +52,7 @@ async def update_trades(
 ):
     """Update user's target trades for lead filtering."""
     valid_trades = ["electrician", "plumber", "carpenter", "roofer", "landscaper",
-                    "painter", "general", "hvac", "other"]
+                    "painter", "general", "hvac", "demolition", "cabinets", "countertops", "other"]
     for t in trades:
         if t not in valid_trades:
             raise HTTPException(status_code=400, detail=f"Invalid trade: {t}")
