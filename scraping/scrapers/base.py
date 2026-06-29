@@ -12,7 +12,7 @@ class BaseScraper(ABC):
         self.config = config or {}
 
     @abstractmethod
-    async def scrape(self) -> List[RawLead]:
+    async def scrape(self, zip_codes: Optional[List[str]] = None) -> List[RawLead]:
         """
         Main entry point for the scraper.
         Returns a list of RawLead objects.

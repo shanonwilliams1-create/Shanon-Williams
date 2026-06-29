@@ -9,12 +9,18 @@ class SourceType(str, Enum):
     CLASSIFIEDS = "classifieds"
     PERMIT = "permit"
     PROPERTY_RECORD = "property_record"
+    INSTAGRAM = "instagram"
+    TIKTOK = "tiktok"
+    SNAPCHAT = "snapchat"
+    NEXTDOOR = "nextdoor"
+    LOCAL_LISTINGS = "local_listings"
 
 class RawLead(BaseModel):
     source: SourceType
     source_id: str
     source_url: str
     raw_text: str
+    zip_code: Optional[str] = None
     raw_location: Optional[str] = None
     external_timestamp: datetime
     metadata: Dict[str, Any] = Field(default_factory=dict)

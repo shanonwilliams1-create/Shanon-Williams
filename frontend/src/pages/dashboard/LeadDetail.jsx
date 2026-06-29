@@ -88,8 +88,13 @@ export default function LeadDetail() {
           )}
           {lead.address_city && (
             <div className="flex items-center gap-2 text-gray-600">
-              <MapPin size={16} className="text-gray-400" />
-              {lead.address_city}, {lead.address_state}
+              <MapPin size={16} className="text-indigo-500" />
+              <a href={`https://www.google.com/maps?q=${lead.address_city}+${lead.address_state || ''}+${lead.address_zip || ''}`}
+                 target="_blank" rel="noopener noreferrer"
+                 className="text-indigo-600 hover:underline flex items-center gap-1">
+                {lead.address_city}, {lead.address_state}
+                <span className="text-xs text-indigo-400">(Directions)</span>
+              </a>
             </div>
           )}
           {lead.budget_max && (

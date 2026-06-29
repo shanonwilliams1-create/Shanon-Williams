@@ -18,7 +18,7 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 — redirect to login
+// Handle 401 & 402 — redirect to login or show upgrade modal
 api.interceptors.response.use(
   (res) => res,
   (err) => {
@@ -89,6 +89,14 @@ export const subscriptionsAPI = {
 export const usersAPI = {
   getMe: () => api.get('/users/me'),
   updateMe: (data) => api.patch('/users/me', data),
+  updateZipCodes: (zipCodes) => api.put('/users/zip-codes', zipCodes),
+  updateTrades: (trades) => api.put('/users/trades', trades),
+  upgrade: (tier) => api.post('/users/upgrade', { tier }),
+};
+
+// ── Trial ─────────────────────────────────────────────────────────────
+export const trialAPI = {
+  status: () => api.get('/leads/trial-status'),
 };
 
 export default api;

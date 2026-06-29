@@ -5,12 +5,13 @@ import React, { useState } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, MessageSquare, Calendar,
-  Clock, Star, Share2, Settings, LogOut, Bell, Menu, X,
+  Clock, Star, Share2, Settings, LogOut, Bell, Menu, X, BookOpen,
 } from 'lucide-react';
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/dashboard/leads', icon: Users, label: 'Leads' },
+  { to: '/dashboard/operations', icon: BookOpen, label: 'How It Works' },
   { to: '/dashboard/outreach', icon: MessageSquare, label: 'Outreach' },
   { to: '/dashboard/appointments', icon: Calendar, label: 'Appointments' },
   { to: '/dashboard/followups', icon: Clock, label: 'Follow-ups' },

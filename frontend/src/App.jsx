@@ -9,6 +9,7 @@ import DashboardLayout from './pages/dashboard/DashboardLayout';
 import LeadList from './pages/dashboard/LeadList';
 import LeadDetail from './pages/dashboard/LeadDetail';
 import OutreachHub from './pages/dashboard/OutreachHub';
+import OperationsGuide from './pages/dashboard/OperationsGuide';
 import CalendarView from './pages/dashboard/CalendarView';
 import FollowUpTimeline from './pages/dashboard/FollowUpTimeline';
 import ReviewManagement from './pages/dashboard/ReviewManagement';
@@ -29,6 +30,7 @@ function App() {
           <Route index element={<LeadList />} />
           <Route path="leads" element={<LeadList />} />
           <Route path="leads/:id" element={<LeadDetail />} />
+          <Route path="operations" element={<OperationsGuide />} />
           <Route path="outreach" element={<OutreachHub />} />
           <Route path="appointments" element={<CalendarView />} />
           <Route path="followups" element={<FollowUpTimeline />} />

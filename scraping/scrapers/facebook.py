@@ -21,8 +21,11 @@ class FacebookScraper(BaseScraper):
     - Extract post content, author, timestamp, and map to RawLead.
     """
 
-    async def scrape(self, group_urls: Optional[List[str]] = None, keywords: Optional[List[str]] = None) -> List[RawLead]:
+    async def scrape(self, zip_codes: Optional[List[str]] = None, group_urls: Optional[List[str]] = None, keywords: Optional[List[str]] = None) -> List[RawLead]:
         leads = []
+        
+        # Use provided zip codes or default
+        zips = zip_codes or self.config.get("zip_codes", [])
         
         # Use provided keywords/groups or fall back to config defaults
         search_keywords = keywords or self.config.get("keywords", [
@@ -49,19 +52,24 @@ class FacebookScraper(BaseScraper):
             
             if target_groups:
                 for group_url in target_groups:
-                    group_leads = await self._scrape_group(page, group_url, search_keywords)
+                    group_leads = await self._scrape_group(page, group_url, search_keywords, zips)
                     leads.extend(group_leads)
             else:
                 # Fallback to general search if no groups specified
                 for kw in search_keywords:
-                    search_leads = await self._scrape_search(page, kw)
-                    leads.extend(search_leads)
+                    if zips:
+                        for z in zips:
+                            search_leads = await self._scrape_search(page, f"{kw} {z}", z)
+                            leads.extend(search_leads)
+                    else:
+                        search_leads = await self._scrape_search(page, kw)
+                        leads.extend(search_leads)
 
             await browser.close()
             
         return leads
 
-    async def _scrape_group(self, page: Page, group_url: str, keywords: List[str]) -> List[RawLead]:
+    async def _scrape_group(self, page: Page, group_url: str, keywords: List[str], zip_codes: List[str]) -> List[RawLead]:
         leads = []
         try:
             logger.info(f"Scraping Facebook group: {group_url}")
@@ -73,14 +81,18 @@ class FacebookScraper(BaseScraper):
                 await asyncio.sleep(2)
             
             # Extract posts
-            # Facebook's DOM is highly dynamic and obfuscated. 
-            # div[role='article'] is often used for posts.
             posts = await page.query_selector_all("div[role='article']")
             for post in posts:
                 try:
                     text = await post.inner_text()
-                    if any(kw.lower() in text.lower() for kw in keywords):
-                        lead = await self._parse_post_element(post, group_url)
+                    # Filter by keywords and optionally zip code
+                    match_kw = any(kw.lower() in text.lower() for kw in keywords)
+                    match_zip = any(z in text for z in zip_codes) if zip_codes else True
+                    
+                    if match_kw and match_zip:
+                        # Find which zip matched
+                        matched_zip = next((z for z in zip_codes if z in text), None) if zip_codes else None
+                        lead = await self._parse_post_element(post, group_url, matched_zip)
                         if lead:
                             leads.append(lead)
                 except Exception as e:
@@ -91,7 +103,7 @@ class FacebookScraper(BaseScraper):
             
         return leads
 
-    async def _scrape_search(self, page: Page, keyword: str) -> List[RawLead]:
+    async def _scrape_search(self, page: Page, keyword: str, zip_code: Optional[str] = None) -> List[RawLead]:
         leads = []
         try:
             # Facebook search URL for posts
@@ -107,7 +119,7 @@ class FacebookScraper(BaseScraper):
             posts = await page.query_selector_all("div[role='article']")
             for post in posts:
                 try:
-                    lead = await self._parse_post_element(post, search_url)
+                    lead = await self._parse_post_element(post, search_url, zip_code)
                     if lead:
                         leads.append(lead)
                 except Exception as e:
@@ -118,7 +130,7 @@ class FacebookScraper(BaseScraper):
             
         return leads
 
-    async def _parse_post_element(self, element, source_url: str) -> Optional[RawLead]:
+    async def _parse_post_element(self, element, source_url: str, zip_code: Optional[str] = None) -> Optional[RawLead]:
         """Extracts data from a single post DOM element."""
         text = await element.inner_text()
         if not text:
@@ -160,6 +172,7 @@ class FacebookScraper(BaseScraper):
             source_id=source_id,
             source_url=post_url,
             raw_text=text,
+            zip_code=zip_code,
             external_timestamp=timestamp,
             metadata={
                 "author": author_name,

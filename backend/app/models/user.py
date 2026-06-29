@@ -23,6 +23,10 @@ class User(BaseModel):
     stripe_customer_id: Mapped[str | None]
     stripe_subscription_id: Mapped[str | None]
     is_active: Mapped[bool] = mapped_column(default=True)
+    trial_leads_used: Mapped[int] = mapped_column(default=0)
+    service_zip_codes: Mapped[list | None] = mapped_column(JSON, default=list)
+    target_trades: Mapped[list | None] = mapped_column(JSON, default=list)
+    location: Mapped[str | None]
     settings: Mapped[dict | None] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(default=datetime.utcnow, onupdate=datetime.utcnow)
