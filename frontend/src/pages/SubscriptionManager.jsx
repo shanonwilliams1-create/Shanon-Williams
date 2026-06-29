@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, Zap, Star, MapPin, Crown, ArrowRight } from 'lucide-react';
-import { subscriptionsAPI, trialAPI, usersAPI } from '../../services/api';
+import { subscriptionsAPI, trialAPI, usersAPI } from '../services/api';
 
 const PLANS = [
   {
