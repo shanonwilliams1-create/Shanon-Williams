@@ -22,10 +22,9 @@ FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "../../frontend/dist")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup/shutdown logic."""
-    # Startup: create tables in dev mode
-    if settings.environment == "development":
-        async with engine.begin() as conn:
-            await conn.run_sync(BaseModel.metadata.create_all)
+    # Startup: create tables
+    async with engine.begin() as conn:
+        await conn.run_sync(BaseModel.metadata.create_all)
     yield
     # Shutdown
     await engine.dispose()
