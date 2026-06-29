@@ -55,7 +55,7 @@ export default function LeadList() {
 
   // Client-side filtering for zip + search
   const filtered = leads.filter((l) => {
-    if (zipFilter && l.zip_code !== zipFilter) return false;
+    if (zipFilter && !(l.zip_code || '').startsWith(zipFilter)) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     return (l.title || '').toLowerCase().includes(q) || (l.contact_name || '').toLowerCase().includes(q);
@@ -105,12 +105,11 @@ export default function LeadList() {
           <option value="contacted">Contacted</option>
           <option value="booked">Booked</option>
         </select>
-        {/* Zip filter */}
-        <select value={zipFilter} onChange={(e) => setZipFilter(e.target.value)}
-                className="px-4 py-2.5 text-sm border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 bg-white">
-          <option value="">All Zip Codes</option>
-          {userZips.map((z) => <option key={z} value={z}>{z}</option>)}
-        </select>
+        {/* Zip filter — text input so you can type any zip */}
+        <input value={zipFilter} onChange={(e) => setZipFilter(e.target.value)}
+               placeholder="Filter by zip code..."
+               maxLength={5}
+               className="w-full sm:w-40 px-4 py-2.5 text-sm border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500" />
       </div>
 
       {/* Lead cards — mobile-friendly card layout */}
