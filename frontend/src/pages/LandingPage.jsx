@@ -67,9 +67,9 @@ export default function LandingPage() {
       <section className="max-w-6xl mx-auto px-4 py-20 text-center border-t border-white/10">
         <p className="text-gray-400 text-sm">Start from $29/month — No per-lead fees. <button onClick={() => navigate('/auth/signup')} className="text-indigo-400 hover:underline">Start your free trial →</button></p>
       </section>
-    </div>
 
-    {/* Intake chat widget — floats on landing page for prospective clients */}
-    <IntakeChatWidget />
+      {/* Intake chat widget — fixed-position, floats over the page */}
+      <IntakeChatWidget />
+    </div>
   );
 }
