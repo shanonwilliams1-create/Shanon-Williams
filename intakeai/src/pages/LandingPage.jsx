@@ -256,10 +256,11 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <button className="w-full py-3.5 rounded-xl font-semibold text-sm
-                               bg-violet-600 text-white hover:bg-violet-700 transition-colors">
+            <a href="mailto:shanon.williams1@icloud.com?subject=IntakeAI%20Self-Serve%20Signup&body=Firm%20name%3A%0APhone%3A%0APreferred%20contact%20time%3A"
+               className="w-full py-3.5 rounded-xl font-semibold text-sm text-center
+                          bg-violet-600 text-white hover:bg-violet-700 transition-colors">
               Get Started — No Retainer
-            </button>
+            </a>
           </div>
 
           {/* Managed */}
@@ -290,10 +291,11 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <button className="w-full py-3.5 rounded-xl font-semibold text-sm
-                               bg-white text-violet-700 hover:bg-violet-50 transition-colors">
+            <a href="mailto:shanon.williams1@icloud.com?subject=IntakeAI%20Managed%20Setup%20Signup&body=Firm%20name%3A%0APhone%3A%0APreferred%20contact%20time%3A"
+               className="w-full py-3.5 rounded-xl font-semibold text-sm text-center
+                          bg-white text-violet-700 hover:bg-violet-50 transition-colors">
               Get Started — Managed Setup
-            </button>
+            </a>
           </div>
 
         </div>
