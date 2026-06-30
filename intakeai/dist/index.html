@@ -127,8 +127,43 @@
       ]
     }
     </script>
-    <script type="module" crossorigin src="/assets/index-BgSZ8Jyo.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-D28QGBQh.css">
+
+    <!-- Google Translate -->
+    <script>
+      function googleTranslateElementInit() {
+        new google.translate.TranslateElement({
+          pageLanguage: 'en',
+          includedLanguages: 'es,zh-CN,zh-TW,pt,fr,de,ar,ko,ja,vi,ru,hi,tl,ht,it,pl,uk,fa',
+          layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
+          autoDisplay: false,
+        }, 'google_translate_element');
+      }
+    </script>
+    <script src="//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit"></script>
+
+    <style>
+      /* Prevent Google Translate from pushing the page down */
+      .goog-te-banner-frame.skiptranslate { display: none !important; }
+      body { top: 0 !important; }
+
+      /* Style the translate dropdown to match the site */
+      .goog-te-gadget { font-family: inherit !important; font-size: 0 !important; }
+      .goog-te-gadget .goog-te-combo {
+        font-size: 12px !important;
+        font-family: inherit !important;
+        padding: 5px 8px !important;
+        border: 1px solid #e5e7eb !important;
+        border-radius: 8px !important;
+        background: white !important;
+        color: #6b7280 !important;
+        cursor: pointer !important;
+        outline: none !important;
+        max-width: 130px;
+      }
+      .goog-te-gadget .goog-te-combo:hover { border-color: #8b5cf6 !important; color: #7c3aed !important; }
+    </style>
+    <script type="module" crossorigin src="/assets/index-DM2-peI1.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BaW6ZBMI.css">
   </head>
   <body>
     <div id="root"></div>
