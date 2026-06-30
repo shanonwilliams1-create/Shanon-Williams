@@ -45,6 +45,31 @@ function ts() {
   });
 }
 
+function timeAgo(dateStr) {
+  if (!dateStr) return null;
+  const then = new Date(dateStr);
+  if (isNaN(then)) return null;
+  const diffMs = Date.now() - then.getTime();
+  const mins  = Math.floor(diffMs / 60000);
+  const hours = Math.floor(mins / 60);
+  const days  = Math.floor(hours / 24);
+  const weeks = Math.floor(days / 7);
+  if (mins < 1)   return 'just now';
+  if (mins < 60)  return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7)   return `${days}d ago`;
+  if (weeks < 5)  return `${weeks}w ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+function staleBadge(dateStr, status) {
+  if (!dateStr || status === 'Signed Up' || status === 'Not Interested') return null;
+  const days = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  if (days >= 14) return { label: `${days}d — follow up!`, color: 'text-red-500' };
+  if (days >= 7)  return { label: `${days}d — check in?`,  color: 'text-orange-500' };
+  return null;
+}
+
 function toCSV(prospects) {
   const cols = ['Firm Name','Attorney','Email','Phone','Website',
                  'Practice Area','City','State','Status','Last Contacted','Emails Sent','Notes','Added'];
@@ -455,7 +480,16 @@ export default function ProspectTracker() {
                   <div className="min-w-0">
                     <p className="font-semibold text-gray-900 text-sm truncate">{p.firmName||'—'}</p>
                     {p.attorney && <p className="text-xs text-gray-500 truncate">{p.attorney}</p>}
-                    {p.lastContacted && <p className="text-xs text-blue-500">Contacted {p.lastContacted}</p>}
+                    {p.lastContacted && (
+                      <p className="text-xs text-blue-500">
+                        Contacted {timeAgo(p.lastContacted)}
+                        {staleBadge(p.lastContacted, p.status) && (
+                          <span className={`ml-2 font-semibold ${staleBadge(p.lastContacted, p.status).color}`}>
+                            · {staleBadge(p.lastContacted, p.status).label}
+                          </span>
+                        )}
+                      </p>
+                    )}
                   </div>
                   <p className="text-sm text-gray-600 truncate">{p.practiceArea||'—'}</p>
                   <div className="min-w-0">
