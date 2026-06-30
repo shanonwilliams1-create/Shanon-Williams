@@ -42,19 +42,19 @@ async function sendNotification(to, subject, text) {
 
 const SALES_STEPS = [
   // step 0 — greeting
-  (s) => `Hi! I'm here to help you get your law firm set up with IntakeAI. To start, what's your name and your firm's name?`,
+  (s) => `Hey there! Thanks for your interest in IntakeAI. I just need a couple of quick details to get your firm set up. What's your name, and what firm are you with?`,
 
   // step 1 — plan interest (after name/firm)
-  (s) => `Great to meet you, ${s.name || 'there'}! Are you interested in the **Self-Serve** plan ($250/mo, DIY setup) or the **Managed** plan where our team installs everything for you ($200/mo + $500 setup retainer)?`,
+  (s) => `Nice to meet you, ${s.name || 'there'}! We have two options:\n\nSelf-Serve – $250/month. You set it up yourself using our step-by-step guide.\n\nManaged – $200/month + a one-time $500 setup fee. Our team handles everything — installation, configuration, and onboarding.\n\nWhich sounds like a better fit for your firm?`,
 
   // step 2 — email (after plan)
-  (s) => `${s.plan ? `The ${s.plan} plan is a great choice. ` : ''}What email address should we use to reach you?`,
+  (s) => `${s.plan ? `${s.plan} is a popular choice. ` : ''}What's the best email address to reach you at?`,
 
   // step 3 — phone (after email)
-  (s) => `Last thing — what's a good phone number in case our team needs to reach you quickly?`,
+  (s) => `Got it. And a phone number? Our team may give you a quick call to get things moving.`,
 
   // step 4 — done
-  (s) => `You're all set, ${s.name || 'there'}! Our team will reach out to **${s.email}** within 1 business day to get your firm going. Welcome to IntakeAI!`,
+  (s) => `You're all set, ${s.name || 'there'}! Someone from our team will be in touch at ${s.email} within one business day. We're looking forward to working with ${s.firm || 'your firm'}!`,
 ];
 
 function parseSalesInput(step, input, session) {
@@ -123,23 +123,23 @@ app.post('/api/intake/sales/message', async (req, res) => {
 // For the "Free Case Review" widget on law firm sites (or our demo)
 
 const INTAKE_STEPS = [
-  (s) => `Hi! I'm here to help connect you with our legal team. What's your name?`,
+  (s) => `Hi! Thanks for reaching out. I'll grab a few quick details so the right attorney can review your case. What's your name?`,
 
-  (s) => `Hi ${s.name}! What type of legal matter do you need help with? (E.g. car accident, criminal charge, divorce, employment issue, etc.)`,
+  (s) => `Hi ${s.name}! What kind of legal issue are you dealing with? For example — car accident, criminal charge, divorce, workers' comp, immigration. Whatever fits your situation.`,
 
-  (s) => `I understand. Can you briefly describe what happened and when it occurred?`,
+  (s) => `Got it. Can you give me a brief description of what happened and when?`,
 
-  (s) => `Thank you for sharing that. Is this an urgent situation — do you have an upcoming court date, were you recently arrested, or are you in immediate need of legal help?`,
+  (s) => `Thanks for sharing that. Is this time-sensitive? For instance — do you have a court date coming up, were you recently arrested, or do you need help right away?`,
 
-  (s) => `Understood. What's the best phone number to reach you?`,
+  (s) => `Understood. What's the best phone number to reach you at?`,
 
-  (s) => `Almost done — what email address should we send your case summary to?`,
+  (s) => `Almost done — what email should we send your case summary to?`,
 
   (s) => {
     const urgent = /yes|urgent|arrested|court|accident|hospital|emergency/i.test(s.urgency || '');
     return urgent
-      ? `Thank you, ${s.name}. Given the urgency of your situation, our team will prioritize your case and reach out to **${s.phone || s.email}** as soon as possible — typically within the hour during business hours. You'll also receive a confirmation at ${s.email}.`
-      : `Thank you, ${s.name}! I've created your intake summary and our team will review your case and reach out to you at **${s.email}** within 1 business day.`;
+      ? `Thank you, ${s.name}. Your case has been flagged as urgent. Our team will reach out to you at ${s.phone || s.email} as soon as possible. You'll also get a confirmation at ${s.email}.`
+      : `Thank you, ${s.name}! Your intake has been submitted. One of our attorneys will review your case and follow up at ${s.email} within one business day.`;
   },
 ];
 
