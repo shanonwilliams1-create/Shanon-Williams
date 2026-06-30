@@ -175,6 +175,86 @@ async def send_email(lead: IntakeLead) -> bool:
     return False
 
 
+def _build_sales_email_body(lead: IntakeLead) -> str:
+    return f"""
+<html><body style="font-family:sans-serif;max-width:600px;margin:auto;padding:20px">
+  <div style="background:#eef2ff;border-left:4px solid #4f46e5;padding:12px 16px;
+              border-radius:4px;margin-bottom:20px">
+    <h2 style="margin:0;color:#4338ca">New IntakeAI Sales Lead</h2>
+    <p style="margin:4px 0 0;color:#6b7280;font-size:14px">
+      Plan interest: {lead.case_type or 'Not specified'}
+    </p>
+  </div>
+  <table style="border-collapse:collapse;width:100%">
+    <tr><td style="padding:6px 0;width:140px"><strong>Name:</strong></td>
+        <td>{lead.client_name or '—'}</td></tr>
+    <tr><td><strong>Phone:</strong></td>
+        <td><a href="tel:{lead.client_phone}">{lead.client_phone or '—'}</a></td></tr>
+    <tr><td><strong>Email:</strong></td>
+        <td><a href="mailto:{lead.client_email}">{lead.client_email or '—'}</a></td></tr>
+    <tr><td><strong>Details:</strong></td><td>{lead.description or '—'}</td></tr>
+  </table>
+  <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb"/>
+  <p style="color:#9ca3af;font-size:12px">
+    IntakeAI Sales &nbsp;·&nbsp; Session ID: {lead.session_id} &nbsp;·&nbsp;
+    {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}
+  </p>
+</body></html>
+""".strip()
+
+
+async def send_sales_lead_email(lead: IntakeLead) -> bool:
+    if not all([settings.sendgrid_api_key, settings.sales_email]):
+        logger.info("SendGrid/sales_email not configured — sales lead email skipped")
+        return False
+
+    payload = {
+        "personalizations": [{"to": [{"email": settings.sales_email}]}],
+        "from": {"email": settings.from_email, "name": "IntakeAI"},
+        "subject": f"[IntakeAI] New sales lead — {lead.client_name or 'Unknown'}",
+        "content": [{"type": "text/html", "value": _build_sales_email_body(lead)}],
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                json=payload,
+                headers={"Authorization": f"Bearer {settings.sendgrid_api_key}"},
+                timeout=10.0,
+            )
+            if resp.status_code == 202:
+                logger.info(f"Sales lead email sent for {lead.session_id}")
+                return True
+            logger.error(f"SendGrid sales email failed: {resp.status_code} {resp.text}")
+        except Exception as exc:
+            logger.error(f"SendGrid sales email error: {exc}")
+    return False
+
+
+async def notify_sales_team(lead: IntakeLead, db) -> bool:
+    """Email the IntakeAI sales inbox when a prospective firm completes the sales chat."""
+    if lead.attorney_notified:
+        return True  # already sent
+
+    ok = await send_sales_lead_email(lead)
+    if not ok:
+        logger.warning(
+            f"Sales lead captured (no email channel configured):\n"
+            f"  Name:  {lead.client_name}\n"
+            f"  Phone: {lead.client_phone}\n"
+            f"  Email: {lead.client_email}\n"
+            f"  Plan:  {lead.case_type}\n"
+            f"  Details: {lead.description}"
+        )
+
+    lead.attorney_notified = True
+    lead.notified_at = datetime.utcnow()
+    await db.flush()
+
+    return ok
+
+
 async def notify_attorney(lead: IntakeLead, db) -> bool:
     """
     Send SMS and/or email when a lead is hot or urgent.

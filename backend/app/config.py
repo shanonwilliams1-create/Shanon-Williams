@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     attorney_email: str = ""
     firm_name: str = "Our Law Firm"
 
+    # ── IntakeAI sales lead notifications ─────────────────────────────
+    sales_email: str = ""
+
     # ── Rate limiting ────────────────────────────────────────────────
     rate_limit_per_minute: int = 100
 

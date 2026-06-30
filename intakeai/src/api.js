@@ -10,4 +10,10 @@ export const intakeAPI = {
     api.post('/intake/chat/message', { session_id: sessionId, message }),
 };
 
+export const salesAPI = {
+  startSession: (plan = null) => api.post('/intake/sales/start', { plan }),
+  sendMessage:  (sessionId, message) =>
+    api.post('/intake/sales/message', { session_id: sessionId, message }),
+};
+
 export default api;

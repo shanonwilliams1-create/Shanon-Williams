@@ -34,7 +34,8 @@ from app.services.intake_service import (
     process_voice_step,
     VOICE_STEPS,
 )
-from app.services.notification_service import notify_attorney
+from app.services.sales_service import start_sales_session, process_sales_message
+from app.services.notification_service import notify_attorney, notify_sales_team
 
 router = APIRouter(prefix="/intake", tags=["intake"])
 
@@ -52,6 +53,10 @@ class MessageRequest(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: str  # contacted | rejected
+
+
+class SalesStartRequest(BaseModel):
+    plan: Optional[str] = None  # self_serve | managed
 
 
 # ── Chat endpoints ───────────────────────────────────────────────────
@@ -86,6 +91,39 @@ async def chat_message(req: MessageRequest, db: AsyncSession = Depends(get_db)):
         lead = res.scalar_one_or_none()
         if lead and not lead.attorney_notified:
             await notify_attorney(lead, db)
+
+    return result
+
+
+# ── Sales chat (selling IntakeAI itself to prospective law firms) ────
+
+@router.post("/sales/start")
+async def sales_start(req: SalesStartRequest, db: AsyncSession = Depends(get_db)):
+    """Create a new sales-lead chat session and return the opening message."""
+    return await start_sales_session(db, plan=req.plan)
+
+
+@router.post("/sales/message")
+async def sales_message(req: MessageRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Process a sales-chat reply and advance the lead-capture state machine.
+    When the session completes, emails the IntakeAI sales inbox.
+    """
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    result = await process_sales_message(req.session_id, req.message, db)
+
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    if result.get("done"):
+        res = await db.execute(
+            select(IntakeLead).where(IntakeLead.session_id == req.session_id)
+        )
+        lead = res.scalar_one_or_none()
+        if lead and not lead.attorney_notified:
+            await notify_sales_team(lead, db)
 
     return result
 

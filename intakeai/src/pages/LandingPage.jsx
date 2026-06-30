@@ -1,9 +1,10 @@
-import React from 'react';
+import { useState } from 'react';
 import {
   Scale, Zap, Bell, Star, ChevronRight, Phone,
   MessageCircle, ClipboardCheck, ShieldCheck, Clock, BarChart2,
 } from 'lucide-react';
 import IntakeChatWidget from '../components/IntakeChatWidget.jsx';
+import SalesChatWidget from '../components/SalesChatWidget.jsx';
 
 const FEATURES = [
   {
@@ -52,6 +53,11 @@ const TESTIMONIALS = [
 ];
 
 export default function LandingPage() {
+  const [salesOpen, setSalesOpen] = useState(false);
+  const [salesPlan, setSalesPlan] = useState(null);
+
+  const openSales = (plan) => { setSalesPlan(plan); setSalesOpen(true); };
+
   return (
     <div className="min-h-screen bg-white text-gray-900 font-sans">
 
@@ -256,11 +262,11 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <a href="mailto:shanon.williams1@icloud.com?subject=IntakeAI%20Self-Serve%20Signup&body=Firm%20name%3A%0APhone%3A%0APreferred%20contact%20time%3A"
-               className="w-full py-3.5 rounded-xl font-semibold text-sm text-center
-                          bg-violet-600 text-white hover:bg-violet-700 transition-colors">
+            <button onClick={() => openSales('self_serve')}
+                    className="w-full py-3.5 rounded-xl font-semibold text-sm
+                               bg-violet-600 text-white hover:bg-violet-700 transition-colors">
               Get Started — No Retainer
-            </a>
+            </button>
           </div>
 
           {/* Managed */}
@@ -291,11 +297,11 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <a href="mailto:shanon.williams1@icloud.com?subject=IntakeAI%20Managed%20Setup%20Signup&body=Firm%20name%3A%0APhone%3A%0APreferred%20contact%20time%3A"
-               className="w-full py-3.5 rounded-xl font-semibold text-sm text-center
-                          bg-white text-violet-700 hover:bg-violet-50 transition-colors">
+            <button onClick={() => openSales('managed')}
+                    className="w-full py-3.5 rounded-xl font-semibold text-sm
+                               bg-white text-violet-700 hover:bg-violet-50 transition-colors">
               Get Started — Managed Setup
-            </a>
+            </button>
           </div>
 
         </div>
@@ -338,6 +344,7 @@ export default function LandingPage() {
       </footer>
 
       <IntakeChatWidget />
+      <SalesChatWidget open={salesOpen} plan={salesPlan} onClose={() => setSalesOpen(false)} />
     </div>
   );
 }
