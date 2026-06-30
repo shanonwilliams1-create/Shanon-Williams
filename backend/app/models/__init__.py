@@ -119,3 +119,4 @@ from app.models.review import Review
 from app.models.referral import Referral
 from app.models.subscription import SubscriptionPlan
 from app.models.scraping import ScrapingSource, ScrapingLog
+from app.models.intake import IntakeLead

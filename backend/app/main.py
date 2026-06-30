@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.database import engine, BaseModel
 from app.routers import auth, users, leads, outreach, appointments, followups, reviews, referrals
+from app.routers import intake
 
 APP_NAME = "LeadForge API"
 APP_VERSION = "0.1.0"
@@ -55,6 +56,7 @@ app.include_router(appointments.router, prefix="/api")
 app.include_router(followups.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")
 app.include_router(referrals.router, prefix="/api")
+app.include_router(intake.router, prefix="/api")
 
 
 @app.get("/api/health")

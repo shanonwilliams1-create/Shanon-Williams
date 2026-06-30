@@ -100,4 +100,14 @@ export const trialAPI = {
   status: () => api.get('/leads/trial-status'),
 };
 
+// ── Intake (chat widget + phone calls) ────────────────────────────────
+export const intakeAPI = {
+  startSession:  (source = 'chat') => api.post('/intake/chat/start', { source }),
+  sendMessage:   (sessionId, message) =>
+    api.post('/intake/chat/message', { session_id: sessionId, message }),
+  listLeads:     (params) => api.get('/intake/leads', { params }),
+  getLead:       (id) => api.get(`/intake/leads/${id}`),
+  updateStatus:  (id, status) => api.patch(`/intake/leads/${id}/status`, { status }),
+};
+
 export default api;

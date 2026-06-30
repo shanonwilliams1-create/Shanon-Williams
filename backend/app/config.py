@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     google_credentials_path: str = ""
     google_calendar_id: str = "primary"
 
+    # ── Attorney / Firm (intake notifications) ───────────────────────
+    attorney_phone: str = ""      # E.164 format, e.g. +15551234567
+    attorney_email: str = ""
+    firm_name: str = "Our Law Firm"
+
     # ── Rate limiting ────────────────────────────────────────────────
     rate_limit_per_minute: int = 100
 

@@ -17,6 +17,7 @@ import ReviewManagement from './pages/dashboard/ReviewManagement';
 import ReferralProgram from './pages/dashboard/ReferralProgram';
 import SettingsPanel from './pages/dashboard/SettingsPanel';
 import SubscriptionManager from './pages/SubscriptionManager';
+import IntakeLeads from './pages/dashboard/IntakeLeads';
 
 function App() {
   return (
@@ -39,6 +40,7 @@ function App() {
           <Route path="reviews" element={<ReviewManagement />} />
           <Route path="referrals" element={<ReferralProgram />} />
           <Route path="settings" element={<SettingsPanel />} />
+          <Route path="intake" element={<IntakeLeads />} />
         </Route>
 
         <Route path="/subscription" element={<SubscriptionManager />} />
