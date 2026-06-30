@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   Scale, Zap, Bell, Star, ChevronRight, Phone,
   MessageCircle, ClipboardCheck, ShieldCheck, Clock, BarChart2,
+  ChevronDown,
 } from 'lucide-react';
 import IntakeChatWidget from '../components/IntakeChatWidget.jsx';
 import SalesChatWidget from '../components/SalesChatWidget.jsx';
@@ -46,11 +47,66 @@ const STEPS = [
   { n: '4', title: 'Attorney is alerted', desc: 'Hot or urgent leads trigger an instant SMS + email to your attorney with the full intake summary.' },
 ];
 
+const PRACTICE_AREAS = [
+  'Personal Injury', 'Car Accident', 'Criminal Defense', 'DUI / DWI',
+  'Family Law', 'Divorce & Custody', 'Immigration', 'Workers\' Compensation',
+  'Bankruptcy', 'Employment Law', 'Medical Malpractice', 'Estate Planning',
+  'Real Estate Law', 'Social Security Disability', 'Civil Litigation', 'Business Law',
+];
+
+const FAQS = [
+  {
+    q: 'What types of law firms use IntakeAI?',
+    a: 'IntakeAI works for any practice area — personal injury, criminal defense, DUI/DWI, family law, immigration, workers\' compensation, bankruptcy, employment law, estate planning, medical malpractice, and more. If your firm takes client calls, IntakeAI can automate your intake.',
+  },
+  {
+    q: 'How long does setup take?',
+    a: 'Most firms go live within one business day. The Self-Serve plan includes step-by-step docs. The Managed plan includes a dedicated onboarding call where our team installs everything on your website for you.',
+  },
+  {
+    q: 'Does IntakeAI capture leads after hours?',
+    a: 'Yes — that\'s the core value. The intake chat runs 24/7 on your website: nights, weekends, holidays. Clients who need an attorney don\'t wait for business hours, and now you don\'t have to either.',
+  },
+  {
+    q: 'What happens when an urgent lead comes in?',
+    a: 'IntakeAI detects urgency signals — arrests, accidents, court deadlines, hospitalization — and immediately texts and emails your attorney with the full case summary and lead score. Average time from first contact to attorney notification: under 5 minutes.',
+  },
+  {
+    q: 'Is client data secure and HIPAA-aware?',
+    a: 'Yes. All intake data is encrypted in transit and at rest. Attorney-client confidentiality is built into the data architecture. We follow HIPAA-aware data handling practices throughout.',
+  },
+  {
+    q: 'How much does IntakeAI cost?',
+    a: 'Self-Serve is $250/month — no setup fee, cancel anytime. Managed is $200/month plus a one-time $500 setup retainer (first month: $700, then $200/month). Both plans include unlimited intakes and a 14-day free trial.',
+  },
+];
+
 const TESTIMONIALS = [
   { quote: 'We signed three new clients the first week — leads that came in after hours that we would have missed completely.', name: 'Rachel M.', firm: 'Managing Partner, Mercer Law Group' },
   { quote: 'The urgency detection is incredible. I got a text at 11pm about a DUI arrest and called the client first thing in the morning.', name: 'David K.', firm: 'Criminal Defense Attorney' },
   { quote: 'Setup took one afternoon. Our intake volume doubled in 30 days.', name: 'Priya S.', firm: 'Family Law Practice' },
 ];
+
+function FaqItem({ q, a }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border border-gray-200 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-6 py-4 text-left
+                   hover:bg-gray-50 transition-colors"
+      >
+        <span className="font-semibold text-gray-900 text-sm">{q}</span>
+        <ChevronDown size={16} className={`text-gray-400 flex-shrink-0 ml-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="px-6 pb-5 text-sm text-gray-600 leading-relaxed border-t border-gray-100 pt-4">
+          {a}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function LandingPage() {
   const [salesOpen, setSalesOpen] = useState(false);
@@ -208,6 +264,26 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Practice Areas ── */}
+      <section className="bg-violet-50 py-20">
+        <div className="max-w-6xl mx-auto px-4 text-center">
+          <h2 className="text-3xl md:text-4xl font-bold mb-3">Works for Every Practice Area</h2>
+          <p className="text-gray-500 max-w-xl mx-auto mb-12">
+            Whether you handle personal injury, criminal defense, family law, or anything in between —
+            IntakeAI captures and qualifies the right clients for your firm.
+          </p>
+          <div className="flex flex-wrap justify-center gap-3">
+            {PRACTICE_AREAS.map((area) => (
+              <span key={area}
+                    className="px-4 py-2 rounded-full bg-white border border-violet-200
+                               text-sm font-medium text-violet-800 shadow-sm">
+                {area}
+              </span>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* ── Testimonials ── */}
       <section className="bg-gray-50 py-24">
         <div className="max-w-6xl mx-auto px-4">
@@ -304,6 +380,17 @@ export default function LandingPage() {
             </button>
           </div>
 
+        </div>
+      </section>
+
+      {/* ── FAQ ── */}
+      <section id="faq" className="max-w-3xl mx-auto px-4 py-24">
+        <div className="text-center mb-12">
+          <h2 className="text-3xl md:text-4xl font-bold mb-3">Frequently Asked Questions</h2>
+          <p className="text-gray-500">Everything law firms ask before getting started.</p>
+        </div>
+        <div className="space-y-3">
+          {FAQS.map(({ q, a }) => <FaqItem key={q} q={q} a={a} />)}
         </div>
       </section>
 
