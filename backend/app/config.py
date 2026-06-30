@@ -1,6 +1,7 @@
 """
 LeadForge — Application Configuration
 """
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from typing import List
 
@@ -15,6 +16,17 @@ class Settings(BaseSettings):
 
     # ── Database ─────────────────────────────────────────────────────
     database_url: str = "sqlite+aiosqlite:///./leadforge.db"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def coerce_db_url(cls, v: str) -> str:
+        """Railway injects postgres:// or postgresql:// — rewrite for asyncpg."""
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+asyncpg://", 1)
+            if v.startswith("postgresql://") and "+asyncpg" not in v:
+                return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # ── Auth / JWT ───────────────────────────────────────────────────
     jwt_secret_key: str = "change-me-in-production"
