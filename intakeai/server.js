@@ -210,6 +210,48 @@ app.post('/api/intake/chat/message', async (req, res) => {
   res.json({ message: reply, done, score: done ? scoreIntake(session) : undefined });
 });
 
+// ── Outbound Email Sender ─────────────────────────────────────────────────────
+const FROM_NAME = process.env.FROM_NAME || 'Shanon Williams';
+
+app.post('/api/send-email', async (req, res) => {
+  const { to, subject, body } = req.body || {};
+  if (!to || !subject || !body) {
+    return res.status(400).json({ error: 'to, subject, and body are required' });
+  }
+  if (!SENDGRID_KEY) {
+    return res.status(503).json({
+      error: 'not_configured',
+      hint: 'Add SENDGRID_API_KEY and FROM_EMAIL to your Railway environment variables to enable auto-send.',
+    });
+  }
+  try {
+    const payload = {
+      personalizations: [{ to: [{ email: to }] }],
+      from: { email: FROM_EMAIL, name: FROM_NAME },
+      reply_to: { email: FROM_EMAIL, name: FROM_NAME },
+      subject,
+      content: [{ type: 'text/plain', value: body }],
+    };
+    const r = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${SENDGRID_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error(`SendGrid ${r.status}: ${txt}`);
+    }
+    console.log(`Email sent → ${to} | "${subject}"`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('send-email error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Web Scraper ───────────────────────────────────────────────────────────────
 const EMAIL_RE = /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,6}\b/g;
 const PHONE_RE = /(?:\+?1[\s.\-]?)?(?:\(?([2-9]\d{2})\)?[\s.\-]?)([2-9]\d{2})[\s.\-]?(\d{4})/g;

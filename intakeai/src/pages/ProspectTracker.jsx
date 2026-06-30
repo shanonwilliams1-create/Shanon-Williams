@@ -152,6 +152,34 @@ function EmailModal({ prospect, onClose, onSent }) {
   const tpl = buildEmailTemplate(prospect);
   const [subject, setSubject] = useState(tpl.subject);
   const [body, setBody]       = useState(tpl.body);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent]       = useState(false);
+  const [sendError, setSendError] = useState('');
+  const [notConfigured, setNotConfigured] = useState(false);
+
+  const sendNow = async () => {
+    setSending(true);
+    setSendError('');
+    try {
+      const res = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: prospect.email, subject, body }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.error === 'not_configured') { setNotConfigured(true); }
+        else { setSendError(data.error || 'Send failed'); }
+      } else {
+        setSent(true);
+        onSent();
+      }
+    } catch (e) {
+      setSendError('Network error — check your connection.');
+    } finally {
+      setSending(false);
+    }
+  };
 
   const openMailClient = () => {
     const mailto = `mailto:${prospect.email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -160,18 +188,36 @@ function EmailModal({ prospect, onClose, onSent }) {
     onClose();
   };
 
-  const openInbox = () => {
-    // Opens their default email app to inbox filtered to this address
-    window.open(`mailto:${prospect.email}`, '_blank');
-  };
+  if (sent) {
+    return (
+      <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-10 text-center">
+          <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
+            <Send size={22} className="text-green-600" />
+          </div>
+          <h2 className="text-lg font-bold text-gray-900 mb-1">Email Sent!</h2>
+          <p className="text-sm text-gray-500 mb-2">
+            Your message to <span className="font-medium text-gray-700">{prospect.email}</span> was delivered.
+          </p>
+          <p className="text-xs text-gray-400 mb-6">{prospect.firmName} has been marked as Contacted.</p>
+          <button onClick={onClose}
+                  className="w-full py-2.5 rounded-xl bg-violet-600 text-white font-semibold text-sm hover:bg-violet-700 transition-colors">
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <div>
-            <h2 className="font-bold text-gray-900">Compose Email</h2>
-            <p className="text-xs text-gray-500 mt-0.5">To: {prospect.attorney || prospect.firmName} — {prospect.email}</p>
+            <h2 className="font-bold text-gray-900">Review & Send Email</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              To: {prospect.attorney || prospect.firmName} — {prospect.email}
+            </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={18} /></button>
         </div>
@@ -180,33 +226,60 @@ function EmailModal({ prospect, onClose, onSent }) {
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Subject</label>
             <input value={subject} onChange={(e) => setSubject(e.target.value)}
-                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" />
+                   disabled={sending}
+                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm
+                              focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-50" />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Message</label>
             <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={16}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 resize-y font-mono" />
+                      disabled={sending}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm
+                                 focus:outline-none focus:ring-2 focus:ring-violet-500
+                                 resize-y font-mono disabled:opacity-50" />
           </div>
-          <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-xs text-blue-700">
-            Clicking "Open in Email App" will launch your email app (Gmail, Apple Mail, Outlook) with this message pre-filled. Just hit Send there. The prospect will be marked Contacted automatically.
-          </div>
+
+          {notConfigured && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-1">
+              <p className="text-sm font-semibold text-amber-800">Auto-send not set up yet</p>
+              <p className="text-xs text-amber-700">
+                To send directly from the tracker, add these to your Railway environment variables:
+              </p>
+              <ul className="text-xs text-amber-700 list-disc pl-4 space-y-0.5 font-mono">
+                <li>SENDGRID_API_KEY</li>
+                <li>FROM_EMAIL (your verified sender email)</li>
+                <li>FROM_NAME (your name)</li>
+              </ul>
+              <p className="text-xs text-amber-600 mt-1">
+                Until then, use "Open in Email App" below to send manually.
+              </p>
+            </div>
+          )}
+
+          {sendError && (
+            <p className="text-sm text-red-500 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {sendError}
+            </p>
+          )}
         </div>
 
         <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-100">
-          <button onClick={openInbox}
+          <button onClick={openMailClient}
                   className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg border border-gray-200
                              text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-            <Eye size={14} /> View Replies from {prospect.email}
+            <Eye size={14} /> Open in Email App
           </button>
           <div className="flex gap-3">
             <button onClick={onClose}
                     className="px-5 py-2.5 rounded-lg text-sm text-gray-600 border border-gray-200 hover:bg-gray-50">
               Cancel
             </button>
-            <button onClick={openMailClient}
-                    className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold
-                               bg-violet-600 text-white hover:bg-violet-700 transition-colors">
-              <Send size={14} /> Open in Email App
+            <button onClick={sendNow} disabled={sending || !prospect.email}
+                    className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-semibold
+                               bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-colors">
+              {sending
+                ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Sending…</>
+                : <><Send size={14} /> Approve & Send</>}
             </button>
           </div>
         </div>
