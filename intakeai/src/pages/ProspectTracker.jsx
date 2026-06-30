@@ -72,7 +72,7 @@ function staleBadge(dateStr, status) {
 
 function toCSV(prospects) {
   const cols = ['Firm Name','Attorney','Email','Phone','Website',
-                 'Practice Area','City','State','Status','Last Contacted','Emails Sent','Notes','Added'];
+                 'Practice Area','City','State','Status','Last Contacted','Contact History','Notes','Added'];
   const rows = prospects.map((p) => [
     p.firmName, p.attorney, p.email, p.phone, p.website,
     p.practiceArea, p.city, p.state, p.status, p.lastContacted || '',
@@ -344,15 +344,16 @@ export default function ProspectTracker() {
     setModal(null);
   };
 
-  const markContacted = (id) => {
+  const markContacted = (id, method = 'Email') => {
     const now = ts();
+    const label = method === 'Phone Call' ? `📞 Phone call ${now}` : `📧 Email sent ${now}`;
     setProspects((p) => p.map((x) =>
       x.id === id
         ? {
             ...x,
             status: x.status === 'New' ? 'Contacted' : x.status,
             lastContacted: now,
-            contactHistory: [...(x.contactHistory || []), `Email sent ${now}`],
+            contactHistory: [...(x.contactHistory || []), label],
           }
         : x
     ));
@@ -512,6 +513,12 @@ export default function ProspectTracker() {
                         <Mail size={14} />
                       </button>
                     )}
+                    <button
+                      onClick={() => markContacted(p.id, 'Phone Call')}
+                      title="Log phone call"
+                      className="p-1.5 text-gray-400 hover:text-green-600 rounded-lg hover:bg-green-50 transition-colors">
+                      <Phone size={14} />
+                    </button>
                     <button onClick={() => setModal(p)}
                             title="Edit"
                             className="p-1.5 text-gray-400 hover:text-violet-600 rounded-lg hover:bg-violet-50 transition-colors">
@@ -556,7 +563,7 @@ export default function ProspectTracker() {
                     )}
                     {p.contactHistory?.length > 0 && (
                       <div className="text-xs space-y-0.5">
-                        <p className="font-semibold text-gray-500 mb-1">Email history</p>
+                        <p className="font-semibold text-gray-500 mb-1">Contact history</p>
                         {p.contactHistory.map((entry, i) => (
                           <p key={i} className="text-gray-400">• {entry}</p>
                         ))}
@@ -583,7 +590,7 @@ export default function ProspectTracker() {
         <EmailModal
           prospect={emailModal}
           onClose={() => setEmailModal(null)}
-          onSent={() => markContacted(emailModal.id)}
+          onSent={() => markContacted(emailModal.id, 'Email')}
         />
       )}
     </div>
