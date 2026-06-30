@@ -231,53 +231,71 @@ export default function LandingPage() {
           <h2 className="text-3xl md:text-4xl font-bold mb-3">Simple, Transparent Pricing</h2>
           <p className="text-gray-500">No per-lead fees. No surprises. Cancel anytime.</p>
         </div>
-        <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-          {[
-            {
-              name: 'Starter', price: '$49', per: '/month',
-              features: ['1 attorney seat', 'Chat widget + phone intake', 'Email notifications', 'Lead scoring', '100 intakes / month'],
-              cta: 'Start Free Trial', highlight: false,
-            },
-            {
-              name: 'Pro', price: '$99', per: '/month',
-              features: ['3 attorney seats', 'Everything in Starter', 'SMS + email alerts', 'Priority support', 'Unlimited intakes'],
-              cta: 'Start Free Trial', highlight: true,
-            },
-            {
-              name: 'Firm', price: '$249', per: '/month',
-              features: ['Unlimited seats', 'Everything in Pro', 'Custom branding', 'API access', 'Dedicated onboarding'],
-              cta: 'Contact Sales', highlight: false,
-            },
-          ].map(({ name, price, per, features, cta, highlight }) => (
-            <div key={name}
-                 className={`rounded-2xl p-7 border ${highlight
-                   ? 'bg-violet-700 text-white border-violet-700 shadow-xl scale-105'
-                   : 'bg-white border-gray-200 shadow-sm'}`}>
-              {highlight && (
-                <div className="inline-block px-3 py-1 rounded-full bg-yellow-400 text-yellow-900
-                                text-xs font-bold mb-4">
-                  Most Popular
-                </div>
-              )}
-              <p className={`font-bold text-lg mb-1 ${highlight ? 'text-white' : 'text-gray-900'}`}>{name}</p>
-              <div className="flex items-end gap-1 mb-6">
-                <span className={`text-4xl font-extrabold ${highlight ? 'text-white' : 'text-gray-900'}`}>{price}</span>
-                <span className={`text-sm mb-1 ${highlight ? 'text-violet-200' : 'text-gray-500'}`}>{per}</span>
-              </div>
-              <ul className="space-y-2.5 mb-7">
-                {features.map((f) => (
-                  <li key={f} className={`flex items-center gap-2 text-sm ${highlight ? 'text-violet-100' : 'text-gray-600'}`}>
-                    <span className={`text-base ${highlight ? 'text-violet-300' : 'text-violet-600'}`}>✓</span> {f}
-                  </li>
-                ))}
-              </ul>
-              <button className={`w-full py-3 rounded-xl font-semibold text-sm transition-colors ${highlight
-                ? 'bg-white text-violet-700 hover:bg-violet-50'
-                : 'bg-violet-600 text-white hover:bg-violet-700'}`}>
-                {cta}
-              </button>
+        <div className="grid md:grid-cols-2 gap-8 max-w-3xl mx-auto">
+
+          {/* Self-Serve */}
+          <div className="rounded-2xl p-8 border border-gray-200 bg-white shadow-sm flex flex-col">
+            <p className="font-bold text-xl text-gray-900 mb-1">Self-Serve</p>
+            <p className="text-sm text-gray-500 mb-6">Set it up yourself — no retainer required.</p>
+            <div className="flex items-end gap-1 mb-2">
+              <span className="text-5xl font-extrabold text-gray-900">$250</span>
+              <span className="text-sm text-gray-500 mb-2">/month</span>
             </div>
-          ))}
+            <p className="text-xs text-gray-400 mb-8">No setup fee · Cancel anytime</p>
+            <ul className="space-y-3 mb-8 flex-1">
+              {[
+                'Chat widget + phone intake',
+                'Automatic lead scoring',
+                'Email attorney alerts',
+                'Full intake dashboard',
+                'Unlimited intakes',
+                'Self-guided setup docs',
+              ].map((f) => (
+                <li key={f} className="flex items-center gap-2 text-sm text-gray-600">
+                  <span className="text-violet-600 font-bold">✓</span> {f}
+                </li>
+              ))}
+            </ul>
+            <button className="w-full py-3.5 rounded-xl font-semibold text-sm
+                               bg-violet-600 text-white hover:bg-violet-700 transition-colors">
+              Get Started — No Retainer
+            </button>
+          </div>
+
+          {/* Managed */}
+          <div className="rounded-2xl p-8 border border-violet-700 bg-violet-700 shadow-xl flex flex-col relative">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full
+                            bg-yellow-400 text-yellow-900 text-xs font-bold whitespace-nowrap">
+              Most Popular
+            </div>
+            <p className="font-bold text-xl text-white mb-1">Managed</p>
+            <p className="text-sm text-violet-200 mb-6">We handle setup, onboarding, and installation for you.</p>
+            <div className="flex items-end gap-1 mb-2">
+              <span className="text-5xl font-extrabold text-white">$200</span>
+              <span className="text-sm text-violet-200 mb-2">/month</span>
+            </div>
+            <p className="text-xs text-violet-300 mb-1">+ $500 one-time setup retainer</p>
+            <p className="text-xs text-violet-400 mb-8">First month total: $700 · Then $200/month</p>
+            <ul className="space-y-3 mb-8 flex-1">
+              {[
+                'Everything in Self-Serve',
+                'We install the widget on your site',
+                'SMS + email attorney alerts',
+                'Custom firm branding',
+                'Dedicated onboarding call',
+                'Priority support',
+              ].map((f) => (
+                <li key={f} className="flex items-center gap-2 text-sm text-violet-100">
+                  <span className="text-violet-300 font-bold">✓</span> {f}
+                </li>
+              ))}
+            </ul>
+            <button className="w-full py-3.5 rounded-xl font-semibold text-sm
+                               bg-white text-violet-700 hover:bg-violet-50 transition-colors">
+              Get Started — Managed Setup
+            </button>
+          </div>
+
         </div>
       </section>
 
