@@ -210,6 +210,131 @@ app.post('/api/intake/chat/message', async (req, res) => {
   res.json({ message: reply, done, score: done ? scoreIntake(session) : undefined });
 });
 
+// ── Web Scraper ───────────────────────────────────────────────────────────────
+const EMAIL_RE = /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,6}\b/g;
+const PHONE_RE = /(?:\+?1[\s.\-]?)?(?:\(?([2-9]\d{2})\)?[\s.\-]?)([2-9]\d{2})[\s.\-]?(\d{4})/g;
+
+const JUNK_EMAIL_DOMAINS = ['sentry.io','wixpress.com','squarespace.com','godaddy.com',
+  'wordpress.com','example.com','domain.com','yourdomain.com','email.com'];
+const JUNK_EMAIL_LOCALS  = /^(noreply|no-reply|donotreply|postmaster|webmaster|support|admin|info@example)/i;
+const JUNK_EMAIL_EXTS    = /\.(png|jpg|gif|svg|webp|pdf|css|js|woff|ttf)$/i;
+
+function extractEmails(html) {
+  EMAIL_RE.lastIndex = 0;
+  const found = new Set();
+  let m;
+  while ((m = EMAIL_RE.exec(html)) !== null) {
+    const e = m[0].toLowerCase();
+    const [local, domain] = e.split('@');
+    if (!domain) continue;
+    if (JUNK_EMAIL_EXTS.test(e)) continue;
+    if (JUNK_EMAIL_LOCALS.test(local)) continue;
+    if (JUNK_EMAIL_DOMAINS.some(d => domain.endsWith(d))) continue;
+    if (local.length > 50) continue;
+    found.add(e);
+  }
+  return [...found];
+}
+
+function extractPhones(text) {
+  PHONE_RE.lastIndex = 0;
+  const found = new Set();
+  let m;
+  const plain = text.replace(/<[^>]+>/g, ' ');
+  while ((m = PHONE_RE.exec(plain)) !== null) {
+    const digits = m[0].replace(/\D/g, '');
+    if (digits.length === 10 || (digits.length === 11 && digits[0] === '1')) {
+      found.add(m[0].trim());
+    }
+  }
+  return [...found];
+}
+
+function extractFirmName(html) {
+  let m = html.match(/<meta[^>]+property="og:site_name"[^>]+content="([^"]{2,80})"/i)
+           || html.match(/<meta[^>]+content="([^"]{2,80})"[^>]+property="og:site_name"/i);
+  if (m) return m[1].trim();
+  m = html.match(/<title[^>]*>([^<]{2,120})<\/title>/i);
+  if (m) return m[1].split(/[|\-–—]/)[0].trim().slice(0, 80);
+  return '';
+}
+
+function findSubpageLinks(html, origin) {
+  const hrefs = [...html.matchAll(/href=["']([^"'#?]+)["']/gi)].map(x => x[1]);
+  return hrefs
+    .filter(h => /contact|about|team|staff|attorney|lawyer|people/i.test(h))
+    .slice(0, 3)
+    .map(h => { try { return h.startsWith('http') ? h : new URL(h, origin).href; } catch { return null; } })
+    .filter(Boolean);
+}
+
+async function fetchHtml(url) {
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+    },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(7000),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('html') && !ct.includes('text')) throw new Error('Not HTML');
+  return r.text();
+}
+
+async function scrapeUrl(rawUrl) {
+  if (!rawUrl.match(/^https?:\/\//i)) rawUrl = 'https://' + rawUrl;
+  let origin;
+  try { origin = new URL(rawUrl).origin; } catch { throw new Error('Invalid URL'); }
+
+  const result = { url: rawUrl, firmName: '', emails: [], phones: [] };
+
+  let mainHtml = '';
+  try {
+    mainHtml = await fetchHtml(rawUrl);
+    result.firmName = extractFirmName(mainHtml);
+    result.emails.push(...extractEmails(mainHtml));
+    result.phones.push(...extractPhones(mainHtml));
+  } catch (e) {
+    result.error = e.message;
+    return result;
+  }
+
+  // Try contact / about / team sub-pages
+  for (const link of findSubpageLinks(mainHtml, origin)) {
+    try {
+      const sub = await fetchHtml(link);
+      result.emails.push(...extractEmails(sub));
+      result.phones.push(...extractPhones(sub));
+    } catch { /* skip */ }
+  }
+
+  result.emails = [...new Set(result.emails)];
+  result.phones = [...new Set(result.phones)];
+  return result;
+}
+
+app.post('/api/scrape', async (req, res) => {
+  const { urls } = req.body || {};
+  if (!Array.isArray(urls) || !urls.length) {
+    return res.status(400).json({ error: 'urls array required' });
+  }
+  const list = urls.slice(0, 50).map(u => u.trim()).filter(Boolean);
+  const results = [];
+  const BATCH = 5;
+  for (let i = 0; i < list.length; i += BATCH) {
+    const batch = list.slice(i, i + BATCH);
+    const done = await Promise.all(batch.map(url =>
+      scrapeUrl(url).catch(e => ({ url, error: e.message, firmName: '', emails: [], phones: [] }))
+    ));
+    results.push(...done);
+    if (i + BATCH < list.length) await new Promise(r => setTimeout(r, 400));
+  }
+  console.log(`Scrape: ${results.length} URLs, ${results.filter(r => r.emails.length).length} with emails`);
+  res.json({ results });
+});
+
 // ── Static frontend ───────────────────────────────────────────────────────────
 app.use(express.static(join(__dirname, 'dist')));
 app.get('*', (_req, res) => {

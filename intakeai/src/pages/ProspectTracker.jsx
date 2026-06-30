@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Plus, Search, Download, Trash2, ChevronDown, ChevronUp,
-  Globe, Mail, Phone, Building2, StickyNote, X, Send, Eye,
+  Globe, Mail, Phone, Building2, StickyNote, X, Send, Eye, Radar,
 } from 'lucide-react';
 
 const STATUSES = ['New', 'Contacted', 'Replied', 'Interested', 'Signed Up', 'Not Interested'];
@@ -316,12 +316,189 @@ function ProspectModal({ initial, onSave, onClose }) {
   );
 }
 
+// ── Scrape Modal ─────────────────────────────────────────────────────────────
+function ScrapeModal({ onClose, onAddAll }) {
+  const [step, setStep]       = useState('input');
+  const [urlText, setUrlText] = useState('');
+  const [results, setResults] = useState([]);
+  const [selected, setSelected] = useState(new Set());
+  const [loading, setLoading] = useState(false);
+
+  const scrape = async () => {
+    const urls = urlText.split('\n').map(u => u.trim()).filter(Boolean);
+    if (!urls.length) return;
+    setLoading(true);
+    setStep('loading');
+    try {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls }),
+      });
+      const data = await res.json();
+      const list = data.results || [];
+      setResults(list);
+      setSelected(new Set(
+        list.map((_, i) => i).filter(i => list[i].emails.length || list[i].phones.length)
+      ));
+      setStep('results');
+    } catch (e) {
+      alert('Scraping failed: ' + e.message);
+      setStep('input');
+    } finally { setLoading(false); }
+  };
+
+  const toggle = (i) => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(i) ? next.delete(i) : next.add(i);
+    return next;
+  });
+
+  const addSelected = () => {
+    const toAdd = results
+      .filter((_, i) => selected.has(i))
+      .map(r => {
+        let hostname = r.url;
+        try { hostname = new URL(r.url.startsWith('http') ? r.url : 'https://' + r.url).hostname.replace('www.', ''); } catch {}
+        return {
+          firmName: r.firmName || hostname,
+          attorney: '',
+          email: r.emails[0] || '',
+          phone: r.phones[0] || '',
+          website: r.url,
+          practiceArea: '',
+          city: '',
+          state: '',
+          status: 'New',
+          notes: [
+            r.emails.length > 1 ? `Other emails: ${r.emails.slice(1).join(', ')}` : '',
+            r.phones.length > 1 ? `Other phones: ${r.phones.slice(1).join(', ')}` : '',
+          ].filter(Boolean).join('\n'),
+        };
+      });
+    onAddAll(toAdd);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[88vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <div>
+            <h2 className="font-bold text-gray-900">Find Contact Info from Websites</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Paste URLs to automatically pull emails & phone numbers</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={18} /></button>
+        </div>
+
+        {step === 'input' && (
+          <div className="px-6 py-5 space-y-4 flex-1 overflow-y-auto">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Website URLs — one per line
+              </label>
+              <textarea
+                value={urlText}
+                onChange={e => setUrlText(e.target.value)}
+                placeholder={"smithlaw.com\njonesfamilylaw.com\nbrownlitigation.com"}
+                rows={12}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none font-mono"
+              />
+              <p className="text-xs text-gray-400 mt-1.5">
+                Up to 50 URLs. No need to include https://. Larger lists take about 30–60 seconds.
+              </p>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button onClick={onClose}
+                      className="px-5 py-2.5 rounded-lg text-sm text-gray-600 border border-gray-200 hover:bg-gray-50">
+                Cancel
+              </button>
+              <button onClick={scrape} disabled={!urlText.trim()}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold
+                                 bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors">
+                <Radar size={14} /> Scrape Websites
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step === 'loading' && (
+          <div className="px-6 py-20 text-center flex-1">
+            <div className="w-10 h-10 rounded-full border-4 border-violet-200 border-t-violet-600 animate-spin mx-auto mb-4" />
+            <p className="text-sm font-medium text-gray-700">Scraping websites…</p>
+            <p className="text-xs text-gray-400 mt-1">Checking each site for contact info. Hang tight.</p>
+          </div>
+        )}
+
+        {step === 'results' && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-6 pt-4 pb-2 flex-shrink-0">
+              <p className="text-sm text-gray-600">
+                {results.length} site{results.length !== 1 ? 's' : ''} scanned
+                · <span className="font-semibold text-violet-700">{selected.size} selected</span> to add
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 space-y-2 pb-4">
+              {results.map((r, i) => {
+                const hasData = r.emails.length > 0 || r.phones.length > 0;
+                let hostname = r.url;
+                try { hostname = new URL(r.url.startsWith('http') ? r.url : 'https://' + r.url).hostname.replace('www.', ''); } catch {}
+                return (
+                  <div
+                    key={i}
+                    onClick={() => hasData && toggle(i)}
+                    className={`flex gap-3 p-3 rounded-xl border transition-all
+                      ${!hasData ? 'opacity-50 cursor-not-allowed border-gray-100 bg-gray-50' :
+                        selected.has(i)
+                          ? 'border-violet-300 bg-violet-50 cursor-pointer'
+                          : 'border-gray-200 hover:border-gray-300 cursor-pointer'}`}
+                  >
+                    <input type="checkbox" checked={selected.has(i)} disabled={!hasData}
+                           onChange={() => {}} className="mt-0.5 accent-violet-600 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{r.firmName || hostname}</p>
+                      <p className="text-xs text-gray-400">{hostname}</p>
+                      {r.error && <p className="text-xs text-red-400 mt-0.5">{r.error}</p>}
+                      {r.emails.length > 0 && (
+                        <p className="text-xs text-violet-700 mt-0.5">📧 {r.emails.join(' · ')}</p>
+                      )}
+                      {r.phones.length > 0 && (
+                        <p className="text-xs text-green-700 mt-0.5">📞 {r.phones.join(' · ')}</p>
+                      )}
+                      {!hasData && !r.error && (
+                        <p className="text-xs text-gray-400 mt-0.5">No contact info found</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setStep('input')}
+                      className="px-4 py-2.5 rounded-lg text-sm text-gray-600 border border-gray-200 hover:bg-gray-50">
+                Back
+              </button>
+              <button onClick={addSelected} disabled={selected.size === 0}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold
+                                 bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors">
+                <Plus size={14} /> Add {selected.size} to Tracker
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main tracker ─────────────────────────────────────────────────────────────
 export default function ProspectTracker() {
   const [authed, setAuthed]       = useState(() => sessionStorage.getItem('intakeai_auth') === '1');
   const [prospects, setProspects] = useState(loadProspects);
   const [modal, setModal]         = useState(null);
   const [emailModal, setEmailModal] = useState(null);
+  const [showScrape, setShowScrape] = useState(false);
   const [search, setSearch]       = useState('');
   const [filterStatus, setFilter] = useState('All');
   const [sortKey, setSortKey]     = useState('addedAt');
@@ -342,6 +519,14 @@ export default function ProspectTracker() {
       ]);
     }
     setModal(null);
+  };
+
+  const addAll = (forms) => {
+    const now = ts();
+    setProspects((p) => [
+      ...forms.map((f) => ({ ...f, id: Date.now() + Math.random(), addedAt: now, contactHistory: [] })),
+      ...p,
+    ]);
   };
 
   const markContacted = (id, method = 'Email') => {
@@ -411,6 +596,11 @@ export default function ProspectTracker() {
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200
                                text-sm text-gray-600 hover:bg-gray-50 transition-colors">
               <Download size={14} /> Export CSV
+            </button>
+            <button onClick={() => setShowScrape(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-violet-200
+                               bg-violet-50 text-sm text-violet-700 font-medium hover:bg-violet-100 transition-colors">
+              <Radar size={14} /> Find from Website
             </button>
             <button onClick={() => setModal('add')}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600 text-white
@@ -591,6 +781,13 @@ export default function ProspectTracker() {
           prospect={emailModal}
           onClose={() => setEmailModal(null)}
           onSent={() => markContacted(emailModal.id, 'Email')}
+        />
+      )}
+
+      {showScrape && (
+        <ScrapeModal
+          onClose={() => setShowScrape(false)}
+          onAddAll={addAll}
         />
       )}
     </div>
