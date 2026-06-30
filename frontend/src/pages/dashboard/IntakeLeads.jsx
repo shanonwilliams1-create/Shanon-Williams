@@ -8,7 +8,7 @@ import { useState, useEffect } from 'react';
 import {
   AlertTriangle, Flame, Phone, Mail, Clock,
   RefreshCw, ChevronDown, ChevronUp, CheckCircle, XCircle,
-  MessageSquare, PhoneCall, User,
+  MessageSquare, PhoneCall, User, PhoneIncoming,
 } from 'lucide-react';
 import { intakeAPI } from '../../services/api';
 
@@ -254,10 +254,12 @@ function LeadCard({ lead, onStatusChange }) {
 }
 
 export default function IntakeLeads() {
-  const [leads, setLeads]     = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter]   = useState('all');  // all | urgent | hot | new
-  const [search, setSearch]   = useState('');
+  const [leads, setLeads]         = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [filter, setFilter]       = useState('all');  // all | urgent | hot | new
+  const [search, setSearch]       = useState('');
+  const [simulating, setSimulating] = useState(false);
+  const [simResult, setSimResult]   = useState(null); // { ok: bool, label: string }
 
   const fetchLeads = async () => {
     setLoading(true);
@@ -293,6 +295,25 @@ export default function IntakeLeads() {
     );
   });
 
+  const handleSimulateCall = async () => {
+    setSimulating(true);
+    setSimResult(null);
+    try {
+      const { data } = await intakeAPI.simulateCall();
+      setSimResult({
+        ok: true,
+        label: `Simulated call created — score ${Math.round((data.lead_score || 0) * 100)}%`
+              + (data.is_urgent ? ' 🚨 URGENT' : data.is_hot ? ' 🔥 HOT' : ''),
+      });
+      await fetchLeads();
+    } catch (err) {
+      setSimResult({ ok: false, label: err?.response?.data?.detail || 'Simulation failed' });
+    } finally {
+      setSimulating(false);
+      setTimeout(() => setSimResult(null), 6000);
+    }
+  };
+
   const urgentCount = leads.filter((l) => l.is_urgent).length;
   const hotCount    = leads.filter((l) => l.is_hot && !l.is_urgent).length;
 
@@ -306,14 +327,38 @@ export default function IntakeLeads() {
             Clients from chat widget and phone calls
           </p>
         </div>
-        <button onClick={fetchLeads}
-                className="self-start sm:self-auto flex items-center gap-2 px-4 py-2.5 text-sm
-                           font-medium text-gray-700 bg-white border border-gray-300
-                           rounded-xl hover:bg-gray-50 transition-colors">
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            onClick={handleSimulateCall}
+            disabled={simulating}
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium
+                       text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl
+                       disabled:opacity-60 transition-colors shadow-sm"
+          >
+            <PhoneIncoming size={15} className={simulating ? 'animate-pulse' : ''} />
+            {simulating ? 'Simulating…' : 'Simulate Call'}
+          </button>
+          <button onClick={fetchLeads}
+                  className="flex items-center gap-2 px-4 py-2.5 text-sm
+                             font-medium text-gray-700 bg-white border border-gray-300
+                             rounded-xl hover:bg-gray-50 transition-colors">
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
+
+      {/* Simulate result toast */}
+      {simResult && (
+        <div className={`flex items-center gap-2 px-4 py-3 rounded-xl mb-4 text-sm font-medium
+                        ${simResult.ok
+                          ? 'bg-green-50 border border-green-200 text-green-800'
+                          : 'bg-red-50 border border-red-200 text-red-800'}`}>
+          {simResult.ok ? <CheckCircle size={16} /> : <XCircle size={16} />}
+          {simResult.label}
+        </div>
+      )}
+
 
       {/* Stats chips */}
       {(urgentCount > 0 || hotCount > 0) && (

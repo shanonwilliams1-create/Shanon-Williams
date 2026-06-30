@@ -108,6 +108,7 @@ export const intakeAPI = {
   listLeads:     (params) => api.get('/intake/leads', { params }),
   getLead:       (id) => api.get(`/intake/leads/${id}`),
   updateStatus:  (id, status) => api.patch(`/intake/leads/${id}/status`, { status }),
+  simulateCall:  () => api.post('/intake/test/simulate-call'),
 };
 
 export default api;

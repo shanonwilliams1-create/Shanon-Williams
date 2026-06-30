@@ -154,6 +154,73 @@ async def update_intake_status(
     return _serialize_lead(lead)
 
 
+# ── Test / simulation endpoint ──────────────────────────────────────
+
+@router.post("/test/simulate-call")
+async def simulate_call(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Creates a realistic fake phone-intake lead and runs the full pipeline
+    (scoring + attorney notification) without a real Twilio call.
+    Safe to call repeatedly — each run creates a new unique session.
+    """
+    import uuid
+
+    from app.services.intake_service import score_lead
+
+    fake_sid = f"SIM_{uuid.uuid4().hex[:20].upper()}"
+
+    lead = IntakeLead(
+        session_id=fake_sid,
+        intake_source="phone",
+        chat_state="complete",
+        client_name="Maria Gonzalez",
+        client_phone="(555) 213-4478",
+        client_email="maria.g@email.com",
+        case_type="personal_injury",
+        description=(
+            "I was in a serious car accident yesterday on I-95. "
+            "The other driver ran a red light and hit me. "
+            "I was taken to the hospital and had surgery on my shoulder. "
+            "I'm currently in the ICU. The other driver's insurance is already "
+            "calling me and I don't know what to say. I need an attorney asap."
+        ),
+        urgency_note=(
+            "Patient in ICU following surgery — just happened yesterday. "
+            "Insurance company already making contact."
+        ),
+        chat_history=[
+            {"role": "system",
+             "content": "[Simulated phone call — no real Twilio number required]"},
+            {"role": "caller", "step": "name",        "content": "Maria Gonzalez"},
+            {"role": "caller", "step": "case_type",   "content": "car accident, personal injury"},
+            {"role": "caller", "step": "description", "content": "Serious car crash on I-95 yesterday, now in the ICU after shoulder surgery"},
+            {"role": "caller", "step": "urgency",     "content": "Yes, I'm in the hospital right now, it just happened yesterday"},
+            {"role": "caller", "step": "phone",       "content": "five five five two one three four four seven eight"},
+            {"role": "caller", "step": "email",       "content": "maria dot g at email dot com"},
+        ],
+        status="complete",
+    )
+    db.add(lead)
+    await db.flush()
+
+    score, is_hot, is_urgent, indicators = score_lead(lead)
+    lead.lead_score = score
+    lead.is_hot = is_hot
+    lead.is_urgent = is_urgent
+    lead.urgency_indicators = indicators
+
+    await notify_attorney(lead, db)
+
+    return {
+        **_serialize_lead(lead, include_history=True),
+        "simulated": True,
+        "notification_attempted": True,
+    }
+
+
 # ── Twilio voice webhooks ────────────────────────────────────────────
 
 def _twiml(say_text: str, action_url: Optional[str] = None) -> str:
