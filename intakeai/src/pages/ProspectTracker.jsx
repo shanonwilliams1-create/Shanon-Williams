@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   Plus, Search, Download, Trash2, ChevronDown, ChevronUp,
-  Globe, Mail, Phone, Building2, StickyNote, X, Send, Eye, Radar,
+  Globe, Mail, Phone, Building2, StickyNote, X, Send, Eye, Radar, Upload,
 } from 'lucide-react';
 
 const STATUSES = ['New', 'Contacted', 'Replied', 'Interested', 'Signed Up', 'Not Interested'];
@@ -316,6 +316,203 @@ function ProspectModal({ initial, onSave, onClose }) {
   );
 }
 
+// ── CSV Parser ───────────────────────────────────────────────────────────────
+function parseCSVLine(line) {
+  const fields = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (inQuotes && line[i + 1] === '"') { field += '"'; i++; }
+      else { inQuotes = !inQuotes; }
+    } else if (c === ',' && !inQuotes) {
+      fields.push(field.trim());
+      field = '';
+    } else {
+      field += c;
+    }
+  }
+  fields.push(field.trim());
+  return fields;
+}
+
+const TX_CITIES = new Set([
+  'houston','dallas','austin','san antonio','fort worth','el paso',
+  'lubbock','mcallen','arlington','corpus christi','plano','laredo',
+  'irving','garland','frisco','amarillo','pasadena','killeen','mckinney',
+  'mesquite','waco','carrollton','denton','midland','abilene','beaumont',
+  'round rock','odessa','tyler','college station','pearland','richardson',
+  'allen','sugar land','edinburg','new braunfels',
+]);
+
+function inferState(city) {
+  return TX_CITIES.has((city || '').toLowerCase()) ? 'TX' : '';
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const raw = parseCSVLine(lines[0]);
+  const headers = raw.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+
+  const idx = (terms) => headers.findIndex(h => terms.some(t => h.includes(t)));
+  const firmIdx  = idx(['firm','name']);
+  const attyIdx  = idx(['attorney','atty','lawyer','contact']);
+  const emailIdx = idx(['email','mail']);
+  const phoneIdx = idx(['phone','tel','number']);
+  const webIdx   = idx(['website','web','url','site']);
+  const areaIdx  = idx(['practice','area','specialty','type']);
+  const cityIdx  = idx(['city','town','location']);
+  const stateIdx = idx(['state','st']);
+  const notesIdx = idx(['note','comment']);
+
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const f = parseCSVLine(line);
+    const get = (ix) => (ix >= 0 ? (f[ix] || '') : '').trim();
+
+    const firmName = get(firmIdx);
+    if (!firmName || firmName === '#') continue;
+
+    const city  = get(cityIdx);
+    const state = get(stateIdx) || inferState(city);
+
+    rows.push({
+      firmName, attorney: get(attyIdx),
+      email: get(emailIdx), phone: get(phoneIdx),
+      website: get(webIdx), practiceArea: get(areaIdx),
+      city, state, notes: get(notesIdx), status: 'New',
+    });
+  }
+  return rows;
+}
+
+// ── Import Modal ──────────────────────────────────────────────────────────────
+function ImportModal({ onClose, onAddAll }) {
+  const [text, setText]       = useState('');
+  const [preview, setPreview] = useState(null);
+  const [error, setError]     = useState('');
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setText(ev.target.result);
+    reader.readAsText(file);
+  };
+
+  const runParse = () => {
+    try {
+      const rows = parseCSV(text);
+      if (!rows.length) {
+        setError('No rows found. Make sure the CSV has a header row with at least a "Firm Name" column.');
+        return;
+      }
+      setPreview(rows);
+      setError('');
+    } catch (e) {
+      setError('Could not parse CSV: ' + e.message);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+          <div>
+            <h2 className="font-bold text-gray-900">Import from CSV</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Upload a file or paste CSV text</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1"><X size={18} /></button>
+        </div>
+
+        {!preview ? (
+          <div className="px-6 py-5 space-y-4 flex-1 overflow-y-auto">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">Upload CSV file</label>
+              <input type="file" accept=".csv,.txt" onChange={handleFile}
+                     className="block w-full text-sm text-gray-500
+                                file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0
+                                file:font-medium file:bg-violet-50 file:text-violet-700
+                                hover:file:bg-violet-100 cursor-pointer" />
+            </div>
+            <div className="flex items-center gap-3 text-xs text-gray-400">
+              <div className="h-px flex-1 bg-gray-200" /> or paste below <div className="h-px flex-1 bg-gray-200" />
+            </div>
+            <div>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder={"#,Firm Name,City\n1,\"Smith & Associates\",Dallas\n2,Jones Law Firm,Houston"}
+                rows={10}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none font-mono"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Recognized columns: Firm Name, Attorney, Email, Phone, Website, Practice Area, City, State, Notes
+              </p>
+            </div>
+            {error && <p className="text-sm text-red-500">{error}</p>}
+            <div className="flex justify-end gap-3">
+              <button onClick={onClose}
+                      className="px-5 py-2.5 rounded-lg text-sm text-gray-600 border border-gray-200 hover:bg-gray-50">
+                Cancel
+              </button>
+              <button onClick={runParse} disabled={!text.trim()}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold
+                                 bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-40 transition-colors">
+                <Upload size={14} /> Preview Import
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-6 pt-4 pb-2 flex-shrink-0">
+              <p className="text-sm text-gray-700">
+                <span className="font-semibold text-violet-700">{preview.length} prospects</span> ready to import
+                {preview.some(r => !r.email) && (
+                  <span className="text-gray-400 ml-2 text-xs">· use "Find from Website" after to fill in emails</span>
+                )}
+              </p>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 pb-4 space-y-1">
+              {preview.map((r, i) => (
+                <div key={i} className="flex items-center justify-between py-2 border-b border-gray-50 text-sm">
+                  <div>
+                    <span className="font-medium text-gray-900">{r.firmName}</span>
+                    {(r.city || r.state) && (
+                      <span className="text-gray-400 text-xs ml-2">
+                        {[r.city, r.state].filter(Boolean).join(', ')}
+                      </span>
+                    )}
+                  </div>
+                  {r.email
+                    ? <span className="text-xs text-violet-600">{r.email}</span>
+                    : <span className="text-xs text-gray-300">no email yet</span>}
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between gap-3 px-6 py-4 border-t border-gray-100 flex-shrink-0">
+              <button onClick={() => setPreview(null)}
+                      className="px-4 py-2.5 rounded-lg text-sm text-gray-600 border border-gray-200 hover:bg-gray-50">
+                Back
+              </button>
+              <button onClick={() => { onAddAll(preview); onClose(); }}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold
+                                 bg-violet-600 text-white hover:bg-violet-700 transition-colors">
+                <Plus size={14} /> Import {preview.length} Prospects
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Scrape Modal ─────────────────────────────────────────────────────────────
 function ScrapeModal({ onClose, onAddAll }) {
   const [step, setStep]       = useState('input');
@@ -498,7 +695,8 @@ export default function ProspectTracker() {
   const [prospects, setProspects] = useState(loadProspects);
   const [modal, setModal]         = useState(null);
   const [emailModal, setEmailModal] = useState(null);
-  const [showScrape, setShowScrape] = useState(false);
+  const [showScrape, setShowScrape]   = useState(false);
+  const [showImport, setShowImport]   = useState(false);
   const [search, setSearch]       = useState('');
   const [filterStatus, setFilter] = useState('All');
   const [sortKey, setSortKey]     = useState('addedAt');
@@ -596,6 +794,11 @@ export default function ProspectTracker() {
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200
                                text-sm text-gray-600 hover:bg-gray-50 transition-colors">
               <Download size={14} /> Export CSV
+            </button>
+            <button onClick={() => setShowImport(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200
+                               text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+              <Upload size={14} /> Import CSV
             </button>
             <button onClick={() => setShowScrape(true)}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-violet-200
@@ -781,6 +984,13 @@ export default function ProspectTracker() {
           prospect={emailModal}
           onClose={() => setEmailModal(null)}
           onSent={() => markContacted(emailModal.id, 'Email')}
+        />
+      )}
+
+      {showImport && (
+        <ImportModal
+          onClose={() => setShowImport(false)}
+          onAddAll={addAll}
         />
       )}
 
