@@ -78,6 +78,23 @@ function StepFirmInfo({ data, update, togglePractice }) {
         <Input value={data.website} onChange={v => update('website', v)} placeholder="https://smithlaw.com" />
       </Field>
 
+      <Field label="How many attorneys are at your firm?">
+        <Input type="number" value={data.attorneyCount} onChange={v => update('attorneyCount', v)} placeholder="e.g. 2" />
+      </Field>
+
+      {parseInt(data.attorneyCount) >= 5 && plan !== 'firm' && (
+        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <span className="text-amber-500 text-lg flex-shrink-0">⚠️</span>
+          <div>
+            <p className="text-sm font-semibold text-amber-800">You qualify for the Firm plan</p>
+            <p className="text-sm text-amber-700 mt-0.5">
+              With {data.attorneyCount}+ attorneys, the Firm plan ($750/mo) includes round-robin lead distribution,
+              individual attorney profiles, and a dedicated account manager. Our team will reach out to discuss upgrading.
+            </p>
+          </div>
+        </div>
+      )}
+
       <Field label="Practice Areas" hint="Select all that apply">
         <div className="grid grid-cols-2 gap-2 mt-1">
           {PRACTICES.map(p => (
@@ -283,6 +300,7 @@ export default function OnboardingPage() {
   const [data, setData] = useState({
     firmName: '',
     website: '',
+    attorneyCount: '',
     practiceAreas: [],
     attorneyName: '',
     attorneyEmail: '',

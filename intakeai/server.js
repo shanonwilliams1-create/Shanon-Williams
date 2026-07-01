@@ -341,10 +341,12 @@ app.post('/api/phone/gather', async (req, res) => {
 // ── Onboarding ───────────────────────────────────────────────────────────────
 app.post('/api/onboarding/save', async (req, res) => {
   const {
-    plan, firmName, website, practiceAreas,
+    plan, firmName, website, practiceAreas, attorneyCount,
     forwardNumber, timezone, businessOpen, businessClose, callMode,
     attorneyName, attorneyEmail, attorneyPhone,
   } = req.body || {};
+
+  const largeFirm = parseInt(attorneyCount) >= 5;
 
   const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   const APP = process.env.APP_URL || 'https://www.myintakeai.com';
@@ -399,8 +401,9 @@ ${APP}`;
   }
 
   if (NOTIFY_EMAIL) {
-    const summary = `New IntakeAI Client\nPlan: ${plan}\nFirm: ${firmName}\nEmail: ${attorneyEmail}\nPhone: ${attorneyPhone}`;
-    await sendNotification(NOTIFY_EMAIL, `New IntakeAI Client — ${firmName || 'Unknown'}`, summary);
+    const flagged = largeFirm && plan !== 'firm' ? ' ⚠️ UPGRADE OPPORTUNITY — 5+ attorneys on non-Firm plan' : '';
+    const summary = `New IntakeAI Client${flagged}\nPlan: ${plan}\nFirm: ${firmName}\nAttorneys: ${attorneyCount || 'not specified'}\nEmail: ${attorneyEmail}\nPhone: ${attorneyPhone}`;
+    await sendNotification(NOTIFY_EMAIL, `New IntakeAI Client — ${firmName || 'Unknown'}${largeFirm && plan !== 'firm' ? ' ⚠️ FIRM UPGRADE' : ''}`, summary);
   }
 
   console.log(`Onboarding complete: ${firmName} (${plan}) → ${attorneyEmail}`);
