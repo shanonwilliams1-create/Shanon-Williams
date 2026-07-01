@@ -240,11 +240,51 @@ const PHONE_STEPS = [
   { field: 'email',       prompt: null },
 ];
 
+function isBusinessHours(tz = 'America/Chicago', open = '09:00', close = '17:00') {
+  const now     = new Date(new Date().toLocaleString('en-US', { timeZone: tz }));
+  const day     = now.getDay(); // 0=Sun 6=Sat
+  const hhmm    = now.toTimeString().slice(0, 5);
+  return day >= 1 && day <= 5 && hhmm >= open && hhmm < close;
+}
+
 app.post('/api/phone/inbound', (req, res) => {
-  const callSid = req.body?.CallSid;
-  const from    = req.body?.From || '';
+  const callSid  = req.body?.CallSid;
+  const from     = req.body?.From || '';
   if (!callSid) return res.status(400).send('Missing CallSid');
+
+  // Webhook URL params set per-firm in Twilio console:
+  //   ?forward=+15551234567&tz=America/Chicago&open=09:00&close=17:00
+  const forwardTo = req.query.forward || '';
+  const tz        = req.query.tz      || 'America/Chicago';
+  const open      = req.query.open    || '09:00';
+  const close     = req.query.close   || '17:00';
+
+  if (forwardTo && isBusinessHours(tz, open, close)) {
+    // Business hours — ring their real office number
+    console.log(`Phone: business hours, forwarding ${from} → ${forwardTo}`);
+    return res.type('text/xml').send(twiml(
+      `<Say voice="Polly.Joanna">Please hold while we connect your call.</Say>` +
+      `<Dial timeout="20" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}" method="POST">${forwardTo}</Dial>`
+    ));
+  }
+
+  // After hours / weekend — AI intake
+  console.log(`Phone: after hours intake from ${from}`);
   phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone' });
+  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
+});
+
+// If the office doesn't answer during business hours, fall back to AI intake
+app.post('/api/phone/dial-fallback', (req, res) => {
+  const callSid    = req.query.sid;
+  const dialStatus = req.body?.DialCallStatus || '';
+  const from       = req.body?.From || '';
+  if (dialStatus === 'completed') {
+    return res.type('text/xml').send(twiml('<Hangup/>'));
+  }
+  // No answer / busy / failed — run AI intake
+  console.log(`Phone: no answer (${dialStatus}), starting AI intake for ${from}`);
+  phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone-fallback' });
   res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
 });
 
