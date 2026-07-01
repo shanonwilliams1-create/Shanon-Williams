@@ -763,8 +763,10 @@ app.post('/api/phone/inbound', async (req, res) => {
           }
         }
 
-        const available = attorneys.filter(a => a.status === 'available' && a.phone);
-        const allUnavailable = attorneys.every(a => a.status !== 'available');
+        // Only route live calls to intake-eligible roles (not partners/managing partners)
+        const inRotation = attorneys.filter(a => INTAKE_ROLES.has(a.role || 'associate'));
+        const available = inRotation.filter(a => a.status === 'available' && a.phone);
+        const allUnavailable = inRotation.length === 0 || inRotation.every(a => a.status !== 'available');
 
         if (duringHours && available.length > 0) {
           // Route to next available attorney
@@ -1035,14 +1037,22 @@ async function saveLead(leadData) {
     });
   }
 
-  // Alert attorneys with HTML email buttons
+  // Alert attorneys with HTML email buttons — respecting firm hierarchy
   const attorneys = leadData.attorneys || [];
   if (attorneys.length > 0 && dbPool) {
-    // If caller requested a specific attorney, only alert that one
+    const urgent = (lead.score || 50) >= 80;
+    // Filter by role: in-rotation always get alerts; partners only on urgent; managing partners never
+    const eligible = attorneys.filter(a => {
+      const role = a.role || 'associate';
+      if (SILENT_ROLES.has(role)) return false;           // managing partner — dashboard only
+      if (URGENT_ROLES.has(role) && !urgent) return false; // partner — urgent leads only
+      return true;
+    });
+    // If caller requested a specific attorney, only alert that one (regardless of role)
     const targets = leadData.preferred_attorney
       ? attorneys.filter(a => a.name?.toLowerCase().includes(leadData.preferred_attorney.toLowerCase()))
-      : attorneys;
-    const alertList = targets.length > 0 ? targets : attorneys.slice(0, 1);
+      : eligible;
+    const alertList = targets.length > 0 ? targets : eligible.slice(0, 1);
 
     for (const [i, atty] of alertList.entries()) {
       if (!atty.email) continue;
@@ -1109,8 +1119,12 @@ setInterval(async () => {
         [lead.lead_token]
       );
       const alertedTokens = new Set(alerted.map(a => a.attorney_token));
-      const next = attorneys.find(a => !alertedTokens.has(a.attorney_token));
-      if (!next) continue; // All attorneys already alerted
+      // Escalate only to intake-eligible roles first; fall back to partners if all exhausted
+      const inRotation = attorneys.filter(a => INTAKE_ROLES.has(a.role || 'associate'));
+      const unalertedinRotation = inRotation.filter(a => !alertedTokens.has(a.attorney_token));
+      const unalertedPartners   = attorneys.filter(a => URGENT_ROLES.has(a.role || '') && !alertedTokens.has(a.attorney_token));
+      const next = unalertedinRotation[0] || unalertedPartners[0] || null;
+      if (!next) continue; // All eligible attorneys already alerted
 
       const APP = process.env.APP_URL || 'https://www.myintakeai.com';
       const { html, text } = buildLeadAlertEmail({ lead, attorney: next, APP });
@@ -1129,20 +1143,33 @@ setInterval(async () => {
 }, 60_000);
 
 // ── Onboarding ───────────────────────────────────────────────────────────────
+// Roles that receive all lead notifications (full intake rotation)
+const INTAKE_ROLES  = new Set(['associate', 'senior_associate', 'of_counsel', 'paralegal']);
+// Roles notified only for urgent leads (score >= 80)
+const URGENT_ROLES  = new Set(['partner']);
+// Roles that get dashboard access only — no lead alerts, not in call rotation
+const SILENT_ROLES  = new Set(['managing_partner']);
+
 app.post('/api/onboarding/save', async (req, res) => {
   const {
     plan, firmName, website, practiceAreas, attorneyCount,
     forwardNumber, timezone, businessOpen, businessClose, callMode,
+    // Legacy single-attorney fields (kept for backward compat)
     attorneyName, attorneyEmail, attorneyPhone, calendarUrl,
+    // New multi-attorney array
+    attorneys: attorneysInput,
   } = req.body || {};
 
-  const largeFirm = parseInt(attorneyCount) >= 5;
+  // Normalize to an array — support both old single-attorney and new multi-attorney format
+  const attorneys = Array.isArray(attorneysInput) && attorneysInput.length > 0
+    ? attorneysInput
+    : [{ name: attorneyName || firmName, email: attorneyEmail, phone: attorneyPhone || '', role: 'associate', calendarUrl: calendarUrl || '' }];
 
-  const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   const APP = process.env.APP_URL || 'https://www.myintakeai.com';
-
-  const attorneyToken = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
-  const statusPageUrl = `${APP}/status/${attorneyToken}`;
+  const token = generateToken(16);
+  const primaryAtty = attorneys[0];
+  const primaryToken = generateToken(16);
+  const statusPageUrl = `${APP}/status/${primaryToken}`;
 
   if (dbPool) {
     try {
@@ -1154,22 +1181,61 @@ app.post('/api/onboarding/save', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [token, plan, firmName, website, Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas,
          forwardNumber, timezone, businessOpen, businessClose, callMode,
-         attorneyName, attorneyEmail, attorneyPhone]
+         primaryAtty.name, primaryAtty.email, primaryAtty.phone]
       );
-      // Create attorney record (status page + call routing)
-      await dbPool.query(
-        `INSERT INTO intakeai_attorneys (attorney_token, client_token, name, phone, email, rotation_order, calendar_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [attorneyToken, token, attorneyName || firmName, attorneyPhone || '', attorneyEmail || '', 0, calendarUrl || null]
-      );
-      // Create attorney dashboard account with a 48-hour password setup link
-      const resetToken   = generateToken();
-      const resetExpires = new Date(Date.now() + 48 * 3600 * 1000).toISOString();
-      await dbPool.query(
-        `INSERT INTO intakeai_attorney_accounts (attorney_token, reset_token, reset_expires) VALUES ($1,$2,$3)
-         ON CONFLICT (attorney_token) DO UPDATE SET reset_token=$2, reset_expires=$3`,
-        [attorneyToken, resetToken, resetExpires]
-      );
+
+      // Create attorney records for each person
+      for (const [i, atty] of attorneys.entries()) {
+        if (!atty.email && !atty.name) continue;
+        const attyToken = i === 0 ? primaryToken : generateToken(16);
+        const role = atty.role || 'associate';
+        await dbPool.query(
+          `INSERT INTO intakeai_attorneys (attorney_token, client_token, name, phone, email, role, rotation_order, calendar_url)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [attyToken, token, atty.name || firmName, atty.phone || '', atty.email || '', role, i * 10, atty.calendarUrl || null]
+        );
+        // Create dashboard login account
+        const resetToken   = generateToken();
+        const resetExpires = new Date(Date.now() + 48 * 3600 * 1000).toISOString();
+        await dbPool.query(
+          `INSERT INTO intakeai_attorney_accounts (attorney_token, reset_token, reset_expires) VALUES ($1,$2,$3)
+           ON CONFLICT (attorney_token) DO UPDATE SET reset_token=$2, reset_expires=$3`,
+          [attyToken, resetToken, resetExpires]
+        );
+        // Send welcome email with password setup link to each attorney who has an email
+        if (SENDGRID_KEY && atty.email) {
+          const roleLabel = {
+            managing_partner: 'Managing Partner', partner: 'Partner',
+            senior_associate: 'Senior Associate', associate: 'Associate',
+            of_counsel: 'Of Counsel', paralegal: 'Paralegal',
+          }[role] || 'Attorney';
+          const welcomeHtml = `<div style="font-family:-apple-system,sans-serif;max-width:520px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
+  <div style="background:linear-gradient(135deg,#7c3aed,#6d28d9);padding:28px 32px">
+    <div style="color:rgba(255,255,255,.8);font-size:12px;font-weight:600">⚖️ INTAKEAI</div>
+    <h2 style="color:#fff;margin:8px 0 4px;font-size:20px">Welcome to IntakeAI, ${atty.name || 'there'}!</h2>
+    <p style="color:rgba(255,255,255,.8);margin:0;font-size:14px">${firmName} · ${roleLabel}</p>
+  </div>
+  <div style="padding:28px 32px">
+    <p style="font-size:15px;color:#111827">You've been added to your firm's IntakeAI account.</p>
+    <p style="color:#374151;font-size:14px;line-height:1.6">Click below to set your password and access your attorney dashboard, where you'll see client leads and manage your availability.</p>
+    <div style="margin:24px 0;text-align:center">
+      <a href="${APP}/attorney/set-password?token=${resetToken}" style="display:inline-block;background:#7c3aed;color:white;padding:14px 32px;border-radius:10px;text-decoration:none;font-weight:700;font-size:15px">Set My Password →</a>
+    </div>
+    <p style="font-size:12px;color:#9ca3af">This link expires in 48 hours. If it expires, contact your firm administrator.</p>
+    ${i === 0 ? `<hr style="border:none;border-top:1px solid #f3f4f6;margin:20px 0">
+    <p style="font-size:13px;font-weight:600;color:#374151">Your Status Page</p>
+    <p style="font-size:13px;color:#6b7280">Bookmark this on your phone — tap it to set yourself Available, In Court, or Out of Office:</p>
+    <p style="font-size:13px"><a href="${APP}/status/${attyToken}" style="color:#7c3aed">${APP}/status/${attyToken}</a></p>` : ''}
+  </div>
+</div>`;
+          await sendHtmlEmail(
+            atty.email,
+            `Welcome to IntakeAI — Set your password`,
+            welcomeHtml,
+            `Welcome to IntakeAI! Set your password here: ${APP}/attorney/set-password?token=${resetToken}`,
+          );
+        }
+      }
     } catch (e) {
       console.error('Onboarding save error:', e.message);
     }
@@ -1177,55 +1243,38 @@ app.post('/api/onboarding/save', async (req, res) => {
 
   const webhookUrl = `${APP}/api/phone/inbound?forward=${encodeURIComponent(forwardNumber || '')}&tz=${encodeURIComponent(timezone || 'America/Chicago')}&open=${businessOpen || '09:00'}&close=${businessClose || '17:00'}&mode=${callMode || 'afterhours'}&token=${token}`;
 
-  if (SENDGRID_KEY && attorneyEmail) {
+  // Send firm admin a setup summary (Twilio webhook URL etc.)
+  if (SENDGRID_KEY && primaryAtty.email) {
     const isManaged = plan === 'managed' || plan === 'firm';
-    const body = `Welcome to IntakeAI, ${attorneyName || firmName || 'there'}!
+    const largeFirm = parseInt(attorneyCount) >= 5;
+    const body = `IntakeAI setup complete for ${firmName}!
 
-Your ${plan} account is now active. Here are your setup details:
-
-FIRM: ${firmName}
 PLAN: ${plan}
-PRACTICE AREAS: ${Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas || 'Not specified'}
-
-SET UP YOUR DASHBOARD (link expires in 48 hours):
-${APP}/attorney/set-password?token=${resetToken}
-
-YOUR ATTORNEY STATUS PAGE (bookmark this on your phone):
-${statusPageUrl}
-
-Tap this link any time to toggle your status — Available, With a Client, In Court, or Out of Office.
-When callers ring your IntakeAI number, the AI checks your live calendar first (if connected),
-then your manual status, and routes accordingly.
-${calendarUrl ? `\nYour calendar is connected — status will update automatically based on your scheduled events.` : `\nTip: Connect your calendar so your status updates automatically when you have court or meetings.\nAny calendar works (Google, Outlook, Apple, Calendly, Clio, and more) — just paste your iCal feed URL\ninto your attorney profile.`}
-
+ATTORNEYS: ${attorneys.length} (individual welcome emails sent to each)
 TWILIO PHONE WEBHOOK URL:
 ${webhookUrl}
 
 HOW TO ACTIVATE PHONE INTAKE:
 1. Sign up at twilio.com and get a phone number
 2. Go to Phone Numbers > Manage > Active Numbers
-3. Click your number > Set Voice Configuration webhook to the URL above (POST method)
+3. Click your number > Voice Configuration > set webhook to the URL above (POST method)
 4. Test by calling your Twilio number
 
-${isManaged
-  ? 'Our team will reach out within 1 business day to complete your full installation, including adding the chat widget to your website.'
-  : 'For the chat widget, visit ' + APP + '/setup or reply to this email for instructions.'}
+${isManaged ? 'Our team will reach out within 1 business day.' : 'Reply to this email with any questions.'}
 
-Best,
-The IntakeAI Team
-${APP}`;
-
-    await sendNotification(attorneyEmail, `Welcome to IntakeAI — Your Setup Details`, body);
+The IntakeAI Team`;
+    await sendNotification(primaryAtty.email, `IntakeAI Setup Complete — ${firmName}`, body);
   }
 
   if (NOTIFY_EMAIL) {
-    const flagged = largeFirm && plan !== 'firm' ? ' ⚠️ UPGRADE OPPORTUNITY — 5+ attorneys on non-Firm plan' : '';
-    const summary = `New IntakeAI Client${flagged}\nPlan: ${plan}\nFirm: ${firmName}\nAttorneys: ${attorneyCount || 'not specified'}\nEmail: ${attorneyEmail}\nPhone: ${attorneyPhone}`;
-    await sendNotification(NOTIFY_EMAIL, `New IntakeAI Client — ${firmName || 'Unknown'}${largeFirm && plan !== 'firm' ? ' ⚠️ FIRM UPGRADE' : ''}`, summary);
+    const largeFirm = parseInt(attorneyCount) >= 5;
+    const flagged = largeFirm && plan !== 'firm' ? ' ⚠️ FIRM UPGRADE OPPORTUNITY' : '';
+    const summary = `New IntakeAI Client${flagged}\nPlan: ${plan}\nFirm: ${firmName}\nAttorneys: ${attorneys.length}\nPrimary: ${primaryAtty.email}`;
+    await sendNotification(NOTIFY_EMAIL, `New IntakeAI Client — ${firmName || 'Unknown'}${flagged}`, summary);
   }
 
-  console.log(`Onboarding complete: ${firmName} (${plan}) → ${attorneyEmail}`);
-  res.json({ ok: true, token, attorneyToken, statusPageUrl });
+  console.log(`Onboarding complete: ${firmName} (${plan}) — ${attorneys.length} attorney(s)`);
+  res.json({ ok: true, token, attorneyToken: primaryToken, statusPageUrl });
 });
 
 // ── Attorney Auth Middleware & Helpers ────────────────────────────────────────
@@ -1246,7 +1295,7 @@ async function requireAttorneyAuth(req, res, next) {
   if (!dbPool) return res.status(503).json({ error: 'No database' });
   try {
     const { rows } = await dbPool.query(
-      `SELECT s.attorney_token, a.name, a.email, a.phone, a.client_token
+      `SELECT s.attorney_token, a.name, a.email, a.phone, a.client_token, a.role
        FROM intakeai_sessions s
        JOIN intakeai_attorneys a ON a.attorney_token = s.attorney_token
        WHERE s.session_token=$1 AND s.expires_at > NOW()`,
@@ -1414,8 +1463,15 @@ app.post('/api/attorney/logout', async (req, res) => {
 });
 
 // GET /api/attorney/me
-app.get('/api/attorney/me', requireAttorneyAuth, (req, res) => {
-  res.json({ attorney: req.attorney });
+app.get('/api/attorney/me', requireAttorneyAuth, async (req, res) => {
+  let firmName = '';
+  if (dbPool && req.attorney.client_token) {
+    const { rows } = await dbPool.query(
+      `SELECT firm_name FROM intakeai_clients WHERE client_token=$1`, [req.attorney.client_token]
+    ).catch(() => ({ rows: [] }));
+    firmName = rows[0]?.firm_name || '';
+  }
+  res.json({ ...req.attorney, firmName });
 });
 
 // POST /api/attorney/set-password — use reset token from welcome email
@@ -1827,6 +1883,7 @@ async function initDb() {
         name            TEXT,
         phone           TEXT,
         email           TEXT,
+        role            TEXT DEFAULT 'associate',
         status          TEXT DEFAULT 'available',
         rotation_order  INTEGER DEFAULT 0,
         last_status_at  TIMESTAMPTZ DEFAULT NOW(),
@@ -1834,6 +1891,7 @@ async function initDb() {
       )
     `);
     await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS calendar_url TEXT`);
+    await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'associate'`);
     await dbPool.query(`ALTER TABLE intakeai_clients   ADD COLUMN IF NOT EXISTS escalation_minutes INTEGER DEFAULT 5`);
     await dbPool.query(`ALTER TABLE intakeai_leads     ADD COLUMN IF NOT EXISTS appt_slot TIMESTAMPTZ`);
 

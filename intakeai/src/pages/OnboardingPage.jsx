@@ -1,11 +1,20 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Scale, ChevronRight, ChevronLeft, Copy, Check, ChevronDown, ChevronUp, Calendar } from 'lucide-react';
+import { Scale, ChevronRight, ChevronLeft, Copy, Check, ChevronDown, ChevronUp, Calendar, Plus, Trash2 } from 'lucide-react';
 
 const PRACTICES = [
   'Personal Injury', 'Criminal Defense', 'DUI / DWI', 'Family Law',
   'Immigration', "Workers' Compensation", 'Bankruptcy', 'Employment Law',
   'Medical Malpractice', 'Estate Planning', 'Real Estate Law', 'Civil Litigation',
+];
+
+const ROLES = [
+  { value: 'managing_partner', label: 'Managing Partner', badge: '#92400e', bg: '#fffbeb', desc: 'Dashboard access only — not in lead rotation' },
+  { value: 'partner',          label: 'Partner',          badge: '#b45309', bg: '#fef3c7', desc: 'Notified on urgent leads only (score 80+)' },
+  { value: 'senior_associate', label: 'Senior Associate', badge: '#1d4ed8', bg: '#eff6ff', desc: 'Full lead rotation and all alerts' },
+  { value: 'associate',        label: 'Associate',        badge: '#15803d', bg: '#f0fdf4', desc: 'Full lead rotation and all alerts' },
+  { value: 'of_counsel',       label: 'Of Counsel',       badge: '#6d28d9', bg: '#f5f3ff', desc: 'Full lead rotation and all alerts' },
+  { value: 'paralegal',        label: 'Paralegal',        badge: '#0e7490', bg: '#ecfeff', desc: 'Lead alerts and intake support' },
 ];
 
 const TIMEZONES = [
@@ -208,41 +217,120 @@ function CalendarGuide() {
   );
 }
 
-function StepAlerts({ data, update }) {
+function AttorneyCard({ atty, index, onChange, onRemove, canRemove }) {
+  const [showCal, setShowCal] = useState(false);
+  const role = ROLES.find(r => r.value === atty.role) || ROLES[3];
+
+  return (
+    <div className="border border-gray-200 rounded-xl p-4 space-y-3 bg-gray-50">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">
+          {index === 0 ? 'Primary Contact' : `Attorney ${index + 1}`}
+        </span>
+        {canRemove && (
+          <button type="button" onClick={onRemove}
+            className="p-1 text-gray-400 hover:text-red-500 transition-colors">
+            <Trash2 size={14} />
+          </button>
+        )}
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">Full Name</label>
+          <Input value={atty.name} onChange={v => onChange('name', v)} placeholder="Jane Smith" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">Role</label>
+          <select value={atty.role} onChange={e => onChange('role', e.target.value)}
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-900
+                       focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 bg-white">
+            {ROLES.map(r => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Role description */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+          style={{ background: role.bg, color: role.badge }}>
+          {role.label}
+        </span>
+        <span className="text-xs text-gray-400">{role.desc}</span>
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">Email</label>
+          <Input type="email" value={atty.email} onChange={v => onChange('email', v)}
+            placeholder="jane@smithlaw.com" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">Mobile (SMS alerts)</label>
+          <Input type="tel" value={atty.phone} onChange={v => onChange('phone', v)}
+            placeholder="+1 555 000 0000" />
+        </div>
+      </div>
+
+      <div>
+        <button type="button" onClick={() => setShowCal(s => !s)}
+          className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-700 font-medium">
+          <Calendar size={12} />
+          {atty.calendarUrl ? 'Calendar connected ✓' : 'Connect calendar (optional)'}
+          {showCal ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+        </button>
+        {showCal && (
+          <div className="mt-2 space-y-2">
+            <p className="text-xs text-gray-400">
+              Paste an iCal URL — IntakeAI reads your calendar live to check availability and set status automatically.
+            </p>
+            <Input value={atty.calendarUrl} onChange={v => onChange('calendarUrl', v)}
+              placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" />
+            <CalendarGuide />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StepAlerts({ data, updateAttorney, addAttorney, removeAttorney }) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-bold text-gray-900">Who receives lead alerts?</h2>
-        <p className="text-sm text-gray-500 mt-1">When a client completes intake, we'll text and email this person instantly.</p>
-      </div>
-
-      <Field label="Attorney Name">
-        <Input value={data.attorneyName} onChange={v => update('attorneyName', v)} placeholder="Jane Smith" />
-      </Field>
-
-      <Field label="Alert Email" hint="Required — receive full case summaries here">
-        <Input type="email" value={data.attorneyEmail} onChange={v => update('attorneyEmail', v)}
-          placeholder="jane@smithlaw.com" required />
-      </Field>
-
-      <Field label="Alert Phone (SMS)" hint="Optional — get a text the moment an urgent lead finishes intake">
-        <Input type="tel" value={data.attorneyPhone} onChange={v => update('attorneyPhone', v)}
-          placeholder="+1 555 000 0000" />
-      </Field>
-
-      <div>
-        <label className="block text-sm font-semibold text-gray-700 mb-1">
-          <span className="flex items-center gap-1.5"><Calendar size={14} /> Calendar URL</span>
-        </label>
-        <p className="text-xs text-gray-400 mb-2">
-          Optional but recommended — IntakeAI checks your live calendar on every call and
-          automatically sets your status (In Court, With a Client, etc.) so you never have to toggle manually.
-          Works with Google, Outlook, Apple, Calendly, Clio, and any iCal-compatible calendar.
+        <h2 className="text-xl font-bold text-gray-900">Your attorneys</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Add everyone who needs dashboard access. Each person gets a personal welcome email with a password setup link.
+          Lead alerts are sent based on role — associates get all leads, partners get urgent only.
         </p>
-        <Input value={data.calendarUrl} onChange={v => update('calendarUrl', v)}
-          placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" />
-        <CalendarGuide />
       </div>
+
+      <div className="space-y-3">
+        {data.attorneys.map((atty, i) => (
+          <AttorneyCard
+            key={i}
+            atty={atty}
+            index={i}
+            onChange={(field, val) => updateAttorney(i, field, val)}
+            onRemove={() => removeAttorney(i)}
+            canRemove={data.attorneys.length > 1}
+          />
+        ))}
+      </div>
+
+      <button type="button" onClick={addAttorney}
+        className="flex items-center gap-2 text-sm text-violet-600 hover:text-violet-700 font-semibold
+                   border border-violet-200 hover:border-violet-400 rounded-lg px-4 py-2.5 w-full
+                   justify-center transition-colors bg-violet-50 hover:bg-violet-100">
+        <Plus size={15} />
+        Add another attorney
+      </button>
+
+      <p className="text-xs text-gray-400 text-center">
+        You can add more attorneys later from the dashboard.
+      </p>
     </div>
   );
 }
@@ -433,10 +521,7 @@ export default function OnboardingPage() {
     website: '',
     attorneyCount: '',
     practiceAreas: [],
-    attorneyName: '',
-    attorneyEmail: '',
-    attorneyPhone: '',
-    calendarUrl: '',
+    attorneys: [{ name: '', email: '', phone: '', role: 'associate', calendarUrl: '' }],
     forwardNumber: '',
     timezone: 'America/Chicago',
     businessOpen: '09:00',
@@ -450,6 +535,20 @@ export default function OnboardingPage() {
     practiceAreas: d.practiceAreas.includes(p)
       ? d.practiceAreas.filter(x => x !== p)
       : [...d.practiceAreas, p],
+  }));
+
+  const updateAttorney = (i, field, val) => setData(d => {
+    const attorneys = [...d.attorneys];
+    attorneys[i] = { ...attorneys[i], [field]: val };
+    return { ...d, attorneys };
+  });
+  const addAttorney = () => setData(d => ({
+    ...d,
+    attorneys: [...d.attorneys, { name: '', email: '', phone: '', role: 'associate', calendarUrl: '' }],
+  }));
+  const removeAttorney = (i) => setData(d => ({
+    ...d,
+    attorneys: d.attorneys.filter((_, idx) => idx !== i),
   }));
 
   const webhookUrl = token
@@ -476,7 +575,7 @@ export default function OnboardingPage() {
   };
 
   const canContinue = step === 1 ? data.firmName.trim().length > 0 : true;
-  const canSubmit = data.attorneyEmail.trim().length > 0;
+  const canSubmit = data.attorneys[0]?.email?.trim().length > 0;
 
   if (step === 4) {
     return <DoneScreen plan={planLabel} data={data} webhookUrl={webhookUrl} statusPageUrl={statusPageUrl} />;
