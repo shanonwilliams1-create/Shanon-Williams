@@ -1,6 +1,8 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import pg from 'pg';
+const { Pool } = pg;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -434,12 +436,301 @@ app.post('/api/scrape', async (req, res) => {
   res.json({ results });
 });
 
+// ── Worldwide Outreach Engine ─────────────────────────────────────────────────
+const DB_URL = process.env.DATABASE_URL || '';
+const dbPool = DB_URL
+  ? new Pool({ connectionString: DB_URL, ssl: { rejectUnauthorized: false } })
+  : null;
+
+async function initDb() {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_firms (
+        id           SERIAL PRIMARY KEY,
+        email        TEXT UNIQUE NOT NULL,
+        firm_name    TEXT,
+        website      TEXT,
+        city         TEXT,
+        country      TEXT,
+        practice     TEXT,
+        discovered   TIMESTAMPTZ DEFAULT NOW(),
+        sent_at      TIMESTAMPTZ,
+        unsubscribed BOOLEAN DEFAULT FALSE
+      )
+    `);
+    console.log('DB: intakeai_firms table ready');
+  } catch (e) {
+    console.error('DB init error:', e.message);
+  }
+}
+
+const WORLDWIDE_TARGETS = [
+  { city: 'Houston',       country: 'US' },
+  { city: 'Dallas',        country: 'US' },
+  { city: 'Austin',        country: 'US' },
+  { city: 'Phoenix',       country: 'US' },
+  { city: 'Philadelphia',  country: 'US' },
+  { city: 'San Antonio',   country: 'US' },
+  { city: 'San Diego',     country: 'US' },
+  { city: 'Jacksonville',  country: 'US' },
+  { city: 'Columbus',      country: 'US' },
+  { city: 'Charlotte',     country: 'US' },
+  { city: 'Indianapolis',  country: 'US' },
+  { city: 'Denver',        country: 'US' },
+  { city: 'Nashville',     country: 'US' },
+  { city: 'Atlanta',       country: 'US' },
+  { city: 'Las Vegas',     country: 'US' },
+  { city: 'Memphis',       country: 'US' },
+  { city: 'Louisville',    country: 'US' },
+  { city: 'Baltimore',     country: 'US' },
+  { city: 'Milwaukee',     country: 'US' },
+  { city: 'Albuquerque',   country: 'US' },
+  { city: 'London',        country: 'UK' },
+  { city: 'Manchester',    country: 'UK' },
+  { city: 'Birmingham',    country: 'UK' },
+  { city: 'Leeds',         country: 'UK' },
+  { city: 'Glasgow',       country: 'UK' },
+  { city: 'Toronto',       country: 'Canada' },
+  { city: 'Vancouver',     country: 'Canada' },
+  { city: 'Calgary',       country: 'Canada' },
+  { city: 'Edmonton',      country: 'Canada' },
+  { city: 'Ottawa',        country: 'Canada' },
+  { city: 'Sydney',        country: 'Australia' },
+  { city: 'Melbourne',     country: 'Australia' },
+  { city: 'Brisbane',      country: 'Australia' },
+  { city: 'Perth',         country: 'Australia' },
+  { city: 'Adelaide',      country: 'Australia' },
+  { city: 'Auckland',      country: 'New Zealand' },
+  { city: 'Wellington',    country: 'New Zealand' },
+  { city: 'Dublin',        country: 'Ireland' },
+  { city: 'Cork',          country: 'Ireland' },
+  { city: 'Singapore',     country: 'Singapore' },
+  { city: 'Johannesburg',  country: 'South Africa' },
+  { city: 'Cape Town',     country: 'South Africa' },
+];
+
+const PRACTICES = [
+  'personal injury', 'criminal defense', 'family law', 'immigration',
+  'real estate', 'employment law', 'bankruptcy', 'estate planning',
+  'business law', 'civil litigation', 'workers compensation', 'DUI defense',
+];
+
+async function searchDuckDuckGo(query) {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  try {
+    const html = await fetchHtml(url);
+    const links = [...html.matchAll(/href="(https?:\/\/[^"&]+)"/gi)]
+      .map(m => { try { return new URL(m[1]).origin; } catch { return null; } })
+      .filter(Boolean);
+    const seen = new Set();
+    return links.filter(l => {
+      if (seen.has(l)) return false;
+      if (/duckduckgo|bing\.com|google\.|facebook\.|yelp\.|avvo\.|findlaw\.|lawyers\.com|justia\.|martindale\.|yellowpages|thumbtack|bark\.com/.test(l)) return false;
+      seen.add(l);
+      return true;
+    }).slice(0, 8);
+  } catch (e) {
+    console.error(`DDG search failed for "${query}":`, e.message);
+    return [];
+  }
+}
+
+async function discoverFirms({ limit = 20 } = {}) {
+  if (!dbPool) return { discovered: 0, error: 'No database configured' };
+  let discovered = 0;
+  const targets   = [...WORLDWIDE_TARGETS].sort(() => Math.random() - 0.5).slice(0, 5);
+  const practices = [...PRACTICES].sort(() => Math.random() - 0.5).slice(0, 3);
+
+  for (const { city, country } of targets) {
+    for (const practice of practices) {
+      if (discovered >= limit) break;
+      const query = `${practice} law firm ${city} ${country} contact email`;
+      console.log(`Discovering: ${query}`);
+      const urls = await searchDuckDuckGo(query);
+      for (const url of urls) {
+        if (discovered >= limit) break;
+        try {
+          const scraped = await scrapeUrl(url);
+          if (!scraped.emails.length) continue;
+          for (const email of scraped.emails.slice(0, 2)) {
+            try {
+              const result = await dbPool.query(
+                `INSERT INTO intakeai_firms (email, firm_name, website, city, country, practice)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (email) DO NOTHING
+                 RETURNING id`,
+                [email, scraped.firmName || url, url, city, country, practice]
+              );
+              if (result.rowCount > 0) discovered++;
+            } catch { /* duplicate */ }
+          }
+        } catch { /* skip bad url */ }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  console.log(`Discovery complete: +${discovered} new firms`);
+  return { discovered };
+}
+
+function buildOutreachEmail(firm) {
+  const firstName = firm.firm_name
+    ? firm.firm_name.split(/[\s,&]/)[0]
+    : 'there';
+  return {
+    subject: `${firm.firm_name || 'Your firm'} is losing clients after hours — here's the fix`,
+    body: `Hi ${firstName},
+
+Here's a number that might surprise you: studies show that 42% of calls to law firms go unanswered — and 85% of those callers never call back. They move on to the next firm.
+
+That means nearly half of your potential clients are slipping away while you're in court, with another client, or simply after hours.
+
+IntakeAI fixes this. It's a 24/7 AI-powered intake system built specifically for law firms:
+
+• Answers every inquiry the moment it comes in — nights, weekends, holidays
+• Qualifies each potential client and scores urgency automatically (arrests, accidents, court deadlines)
+• Sends you a full case summary by text and email the instant a hot lead finishes intake
+• Works for any practice area — personal injury, criminal defense, family law, immigration, and more
+
+The average firm that adds IntakeAI stops losing after-hours leads within the first week.
+
+We offer a 14-day free trial with no setup fee required, and most firms are live within one business day.
+
+Would you have 10 minutes this week to see how it would work for ${firm.firm_name || 'your firm'}?
+
+Best,
+Shanon Williams
+IntakeAI
+https://leadforge-production-3ee8.up.railway.app
+
+---
+You're receiving this because your firm appeared in a public directory.
+To unsubscribe, reply with "unsubscribe" in the subject line.
+IntakeAI · 1234 Main St · Houston, TX 77001`,
+  };
+}
+
+async function sendDailyBatch({ limit = 100 } = {}) {
+  if (!dbPool) return { sent: 0, error: 'No database configured' };
+  if (!SENDGRID_KEY) return { sent: 0, error: 'No SendGrid key' };
+
+  const { rows: firms } = await dbPool.query(
+    `SELECT * FROM intakeai_firms
+     WHERE sent_at IS NULL AND unsubscribed = FALSE
+     ORDER BY discovered ASC
+     LIMIT $1`,
+    [limit]
+  );
+
+  let sent = 0;
+  for (const firm of firms) {
+    const { subject, body } = buildOutreachEmail(firm);
+    try {
+      const r = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${SENDGRID_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: firm.email }] }],
+          from: { email: FROM_EMAIL, name: FROM_NAME },
+          reply_to: { email: FROM_EMAIL, name: FROM_NAME },
+          subject,
+          content: [{ type: 'text/plain', value: body }],
+        }),
+      });
+      if (r.ok || r.status === 202) {
+        await dbPool.query(`UPDATE intakeai_firms SET sent_at = NOW() WHERE id = $1`, [firm.id]);
+        sent++;
+        console.log(`Outreach → ${firm.email} (${firm.city}, ${firm.country})`);
+      } else {
+        const err = await r.text();
+        console.error(`SendGrid ${r.status} for ${firm.email}: ${err}`);
+      }
+    } catch (e) {
+      console.error(`Failed → ${firm.email}: ${e.message}`);
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  console.log(`Batch complete: ${sent}/${firms.length} sent`);
+  return { sent, total: firms.length };
+}
+
+function startScheduler() {
+  if (!dbPool) {
+    console.log('Scheduler: DATABASE_URL not set — worldwide outreach disabled');
+    return;
+  }
+
+  // Discover new firms every 6 hours
+  setInterval(() => { discoverFirms({ limit: 50 }).catch(console.error); }, 6 * 60 * 60 * 1000);
+
+  // Send daily batch at 9 AM UTC
+  function scheduleDaily() {
+    const now  = new Date();
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 9, 0, 0));
+    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
+    const delay = next - now;
+    console.log(`Scheduler: next email batch in ${Math.round(delay / 60000)} min`);
+    setTimeout(async () => {
+      await sendDailyBatch({ limit: 100 }).catch(console.error);
+      scheduleDaily();
+    }, delay);
+  }
+  scheduleDaily();
+
+  // Initial discovery 30 s after startup
+  setTimeout(() => { discoverFirms({ limit: 30 }).catch(console.error); }, 30_000);
+  console.log('Scheduler: worldwide outreach engine started');
+}
+
+// Outreach API endpoints
+app.get('/api/outreach/stats', async (_req, res) => {
+  if (!dbPool) return res.json({ total: 0, sent: 0, pending: 0, note: 'DATABASE_URL not configured' });
+  try {
+    const { rows } = await dbPool.query(`
+      SELECT
+        COUNT(*)                                               AS total,
+        COUNT(sent_at)                                         AS sent,
+        COUNT(*) FILTER (WHERE sent_at IS NULL
+                           AND NOT unsubscribed)               AS pending,
+        COUNT(*) FILTER (WHERE unsubscribed)                   AS unsubscribed
+      FROM intakeai_firms
+    `);
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/outreach/discover', (req, res) => {
+  const limit = Math.min(parseInt(req.body?.limit) || 20, 100);
+  res.json({ ok: true, message: `Discovery started (limit ${limit})` });
+  discoverFirms({ limit }).catch(console.error);
+});
+
+app.post('/api/outreach/send-batch', (req, res) => {
+  const limit = Math.min(parseInt(req.body?.limit) || 100, 100);
+  res.json({ ok: true, message: `Batch send started (limit ${limit})` });
+  sendDailyBatch({ limit }).catch(console.error);
+});
+
+app.post('/api/outreach/unsubscribe', async (req, res) => {
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'email required' });
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  await dbPool.query(`UPDATE intakeai_firms SET unsubscribed = TRUE WHERE email = $1`, [email.toLowerCase().trim()]);
+  res.json({ ok: true });
+});
+
 // ── Static frontend ───────────────────────────────────────────────────────────
 app.use(express.static(join(__dirname, 'dist')));
 app.get('*', (_req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'));
 });
 
-app.listen(PORT, () =>
-  console.log(`IntakeAI on port ${PORT} | notify → ${NOTIFY_EMAIL || '(no email set)'}`)
-);
+app.listen(PORT, async () => {
+  console.log(`IntakeAI on port ${PORT} | notify → ${NOTIFY_EMAIL || '(no email set)'}`);
+  await initDb();
+  startScheduler();
+});
