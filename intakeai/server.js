@@ -338,6 +338,75 @@ app.post('/api/phone/gather', async (req, res) => {
   res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, next.prompt)));
 });
 
+// ── Onboarding ───────────────────────────────────────────────────────────────
+app.post('/api/onboarding/save', async (req, res) => {
+  const {
+    plan, firmName, website, practiceAreas,
+    forwardNumber, timezone, businessOpen, businessClose, callMode,
+    attorneyName, attorneyEmail, attorneyPhone,
+  } = req.body || {};
+
+  const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  const APP = process.env.APP_URL || 'https://www.myintakeai.com';
+
+  if (dbPool) {
+    try {
+      await dbPool.query(
+        `INSERT INTO intakeai_clients
+         (client_token, plan, firm_name, website, practice_areas,
+          forward_number, timezone, business_open, business_close, call_mode,
+          attorney_name, attorney_email, attorney_phone)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [token, plan, firmName, website, Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas,
+         forwardNumber, timezone, businessOpen, businessClose, callMode,
+         attorneyName, attorneyEmail, attorneyPhone]
+      );
+    } catch (e) {
+      console.error('Onboarding save error:', e.message);
+    }
+  }
+
+  const webhookUrl = `${APP}/api/phone/inbound?forward=${encodeURIComponent(forwardNumber || '')}&tz=${encodeURIComponent(timezone || 'America/Chicago')}&open=${businessOpen || '09:00'}&close=${businessClose || '17:00'}&mode=${callMode || 'afterhours'}&token=${token}`;
+
+  if (SENDGRID_KEY && attorneyEmail) {
+    const isManaged = plan === 'managed' || plan === 'firm';
+    const body = `Welcome to IntakeAI, ${attorneyName || firmName || 'there'}!
+
+Your ${plan} account is now active. Here are your setup details:
+
+FIRM: ${firmName}
+PLAN: ${plan}
+PRACTICE AREAS: ${Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas || 'Not specified'}
+
+TWILIO PHONE WEBHOOK URL:
+${webhookUrl}
+
+HOW TO ACTIVATE PHONE INTAKE:
+1. Sign up at twilio.com and get a phone number
+2. Go to Phone Numbers > Manage > Active Numbers
+3. Click your number > Set Voice Configuration webhook to the URL above (POST method)
+4. Test by calling your Twilio number
+
+${isManaged
+  ? 'Our team will reach out within 1 business day to complete your full installation, including adding the chat widget to your website.'
+  : 'For the chat widget, visit ' + APP + '/setup or reply to this email for instructions.'}
+
+Best,
+The IntakeAI Team
+${APP}`;
+
+    await sendNotification(attorneyEmail, `Welcome to IntakeAI — Your Setup Details`, body);
+  }
+
+  if (NOTIFY_EMAIL) {
+    const summary = `New IntakeAI Client\nPlan: ${plan}\nFirm: ${firmName}\nEmail: ${attorneyEmail}\nPhone: ${attorneyPhone}`;
+    await sendNotification(NOTIFY_EMAIL, `New IntakeAI Client — ${firmName || 'Unknown'}`, summary);
+  }
+
+  console.log(`Onboarding complete: ${firmName} (${plan}) → ${attorneyEmail}`);
+  res.json({ ok: true, token });
+});
+
 // ── Stripe Checkout ───────────────────────────────────────────────────────────
 const STRIPE_SECRET          = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_PRICE_SELFSERVE = process.env.STRIPE_PRICE_SELFSERVE || '';
@@ -356,7 +425,7 @@ app.post('/api/stripe/checkout', async (req, res) => {
   try {
     const params = {
       mode: 'subscription',
-      success_url: `${APP_URL}/?checkout=success`,
+      success_url: `${APP_URL}/onboarding?plan=${plan}`,
       cancel_url: `${APP_URL}/#pricing`,
       allow_promotion_codes: 'true',
       'billing_address_collection': 'required',
@@ -581,6 +650,25 @@ const dbPool = DB_URL
 async function initDb() {
   if (!dbPool) return;
   try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_clients (
+        id              SERIAL PRIMARY KEY,
+        client_token    TEXT UNIQUE NOT NULL,
+        plan            TEXT,
+        firm_name       TEXT,
+        practice_areas  TEXT,
+        website         TEXT,
+        forward_number  TEXT,
+        timezone        TEXT DEFAULT 'America/Chicago',
+        business_open   TEXT DEFAULT '09:00',
+        business_close  TEXT DEFAULT '17:00',
+        call_mode       TEXT DEFAULT 'afterhours',
+        attorney_name   TEXT,
+        attorney_email  TEXT,
+        attorney_phone  TEXT,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS intakeai_firms (
         id           SERIAL PRIMARY KEY,
