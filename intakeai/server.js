@@ -97,7 +97,7 @@ async function sendSMS(to, body) {
   }
 }
 
-async function sendHtmlEmail(to, subject, html, text) {
+async function sendHtmlEmail(to, subject, html, text, attachments = []) {
   if (!SENDGRID_KEY || !to) return;
   try {
     const payload = {
@@ -109,6 +109,7 @@ async function sendHtmlEmail(to, subject, html, text) {
         { type: 'text/html',  value: html },
       ],
     };
+    if (attachments.length) payload.attachments = attachments;
     await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
       headers: { Authorization: `Bearer ${SENDGRID_KEY}`, 'Content-Type': 'application/json' },
@@ -142,7 +143,7 @@ function buildLeadAlertEmail({ lead, attorney, APP }) {
     </div>
     <table style="width:100%;border-collapse:collapse;font-size:14px">
       ${lead.case_type ? `<tr><td style="padding:8px 0;color:#6b7280;width:120px">Case Type</td><td style="padding:8px 0;color:#111827;font-weight:500">${lead.case_type}</td></tr>` : ''}
-      ${lead.appt_day  ? `<tr><td style="padding:8px 0;color:#6b7280">Preferred Day</td><td style="padding:8px 0;color:#111827;font-weight:500">${lead.appt_day} ${lead.appt_time || ''}</td></tr>` : ''}
+      ${lead.appt_slot ? `<tr><td style="padding:8px 0;color:#6b7280">📅 Booked Slot</td><td style="padding:8px 0;color:#7c3aed;font-weight:700">${lead.appt_day || new Date(lead.appt_slot).toLocaleString()}</td></tr>` : lead.appt_day ? `<tr><td style="padding:8px 0;color:#6b7280">Preferred Day</td><td style="padding:8px 0;color:#111827;font-weight:500">${lead.appt_day} ${lead.appt_time || ''}</td></tr>` : ''}
       ${lead.description ? `<tr><td style="padding:8px 0;color:#6b7280;vertical-align:top">Description</td><td style="padding:8px 0;color:#111827">${lead.description}</td></tr>` : ''}
       ${lead.urgency ? `<tr><td style="padding:8px 0;color:#6b7280;vertical-align:top">Urgency</td><td style="padding:8px 0;color:#111827">${lead.urgency}</td></tr>` : ''}
       ${lead.phone  ? `<tr><td style="padding:8px 0;color:#6b7280">Phone</td><td style="padding:8px 0;color:#111827;font-weight:500">${lead.phone}</td></tr>` : ''}
@@ -513,6 +514,139 @@ async function fetchCalendarStatus(calendarUrl) {
   }
 }
 
+// ── Calendar Slot Finding ─────────────────────────────────────────────────────
+
+// Convert "hour:min on dateStr in tz" to a UTC Date
+function slotToUTC(dateStr, hourLocal, minLocal, tz) {
+  const approx = new Date(`${dateStr}T${String(hourLocal).padStart(2,'0')}:${String(minLocal).padStart(2,'0')}:00Z`);
+  const parts  = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(approx);
+  const p      = Object.fromEntries(parts.map(x => [x.type, x.value]));
+  const errMs  = ((+p.hour - hourLocal) * 60 + (+p.minute - minLocal)) * 60000;
+  return new Date(approx.getTime() - errMs);
+}
+
+async function findAvailableSlots({ calendarUrl, tz = 'America/Chicago', workOpen = '09:00', workClose = '17:00', slotMins = 60, maxSlots = 4 }) {
+  let busy = [];
+  if (calendarUrl) {
+    try {
+      const r = await fetch(calendarUrl, {
+        headers: { 'User-Agent': 'IntakeAI-Calendar/1.0' },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (r.ok) busy = parseIcalEvents(await r.text());
+    } catch (e) {
+      console.error('Calendar slot fetch:', e.message);
+    }
+  }
+
+  const [openH, openM]  = workOpen.split(':').map(Number);
+  const [closeH, closeM] = workClose.split(':').map(Number);
+  const closeTotal = closeH * 60 + closeM;
+  const slotMs     = slotMins * 60_000;
+  const slots      = [];
+  const nowMs      = Date.now();
+
+  for (let d = 1; d <= 14 && slots.length < maxSlots; d++) {
+    const daySample = new Date(nowMs + d * 86400000);
+    const dateStr   = daySample.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
+    const dow = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(daySample);
+    if (dow === 'Sat' || dow === 'Sun') continue;
+
+    let slotMin = openH * 60 + openM;
+    while (slotMin + slotMins <= closeTotal && slots.length < maxSlots) {
+      const h = Math.floor(slotMin / 60);
+      const m = slotMin % 60;
+      const slotStart = slotToUTC(dateStr, h, m, tz);
+      const slotEnd   = new Date(slotStart.getTime() + slotMs);
+
+      if (slotStart.getTime() > nowMs + 2 * 3600_000) {
+        const overlaps = busy.some(b => b.start < slotEnd && b.end > slotStart);
+        if (!overlaps) {
+          const label = slotStart.toLocaleString('en-US', {
+            timeZone: tz, weekday: 'long', month: 'long', day: 'numeric',
+            hour: 'numeric', minute: '2-digit', hour12: true,
+          });
+          slots.push({ label, iso: slotStart.toISOString() });
+        }
+      }
+      slotMin += slotMins;
+    }
+  }
+  return slots;
+}
+
+function generateIcs({ title, startIso, durationMin = 60, description = '', organizerEmail = '', attendeeEmail = '' }) {
+  const fmt = (iso) => new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const endIso = new Date(new Date(startIso).getTime() + durationMin * 60000).toISOString();
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//IntakeAI//Appointment//EN',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:${generateToken(16)}@intakeai`,
+    `DTSTAMP:${fmt(new Date().toISOString())}`,
+    `DTSTART:${fmt(startIso)}`,
+    `DTEND:${fmt(endIso)}`,
+    `SUMMARY:${title}`,
+    `DESCRIPTION:${description.replace(/\n/g, '\\n')}`,
+    organizerEmail ? `ORGANIZER:mailto:${organizerEmail}` : null,
+    attendeeEmail  ? `ATTENDEE;RSVP=TRUE:mailto:${attendeeEmail}` : null,
+    'STATUS:CONFIRMED',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].filter(Boolean).join('\r\n');
+}
+
+async function sendCalendarInvite({ clientName, clientEmail, apptSlot, apptMatter, attorneyName, organizerEmail }) {
+  if (!clientEmail || !apptSlot) return null;
+  const ics = generateIcs({
+    title: `Appointment: ${apptMatter || 'Legal Consultation'}`,
+    startIso: apptSlot,
+    durationMin: 60,
+    description: `Appointment with ${attorneyName || 'your attorney'}.\nClient: ${clientName}`,
+    organizerEmail: organizerEmail || FROM_EMAIL,
+    attendeeEmail: clientEmail,
+  });
+  const attachment = [{
+    content: Buffer.from(ics).toString('base64'),
+    type: 'text/calendar; method=REQUEST',
+    filename: 'appointment.ics',
+    disposition: 'attachment',
+  }];
+  const slotLabel = new Date(apptSlot).toLocaleString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
+  const html = `<div style="font-family:-apple-system,sans-serif;max-width:520px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
+  <div style="background:linear-gradient(135deg,#7c3aed,#6d28d9);padding:28px 32px">
+    <div style="color:rgba(255,255,255,.8);font-size:12px;font-weight:600;letter-spacing:.5px">⚖️ INTAKEAI</div>
+    <h2 style="color:#fff;margin:8px 0 4px;font-size:20px">Appointment Confirmed!</h2>
+    <p style="color:rgba(255,255,255,.8);margin:0;font-size:14px">${slotLabel}</p>
+  </div>
+  <div style="padding:28px 32px">
+    <p style="font-size:15px;color:#111827">Hi ${clientName || 'there'},</p>
+    <p style="color:#374151;font-size:14px;line-height:1.6">Your appointment has been confirmed. A calendar invitation is attached — open it to add the appointment directly to your calendar.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin:20px 0">
+      <tr><td style="padding:8px 0;color:#6b7280;width:100px">Date &amp; Time</td><td style="padding:8px 0;font-weight:600;color:#111827">${slotLabel}</td></tr>
+      <tr><td style="padding:8px 0;color:#6b7280">Matter</td><td style="padding:8px 0;color:#111827">${apptMatter || 'Legal consultation'}</td></tr>
+      ${attorneyName ? `<tr><td style="padding:8px 0;color:#6b7280">Attorney</td><td style="padding:8px 0;color:#111827">${attorneyName}</td></tr>` : ''}
+    </table>
+    <p style="font-size:12px;color:#9ca3af;margin-top:24px">Need to reschedule? Call our office directly. Powered by IntakeAI.</p>
+  </div>
+</div>`;
+  await sendHtmlEmail(
+    clientEmail,
+    `Appointment Confirmed — ${slotLabel}`,
+    html,
+    `Your appointment is confirmed for ${slotLabel}. A calendar invitation is attached to this email.`,
+    attachment,
+  );
+  return attachment;
+}
+
 // ── Attorney Status Pages ─────────────────────────────────────────────────────
 app.get('/status/:token', async (req, res) => {
   if (!dbPool) return res.status(503).send('Service unavailable');
@@ -654,7 +788,7 @@ app.post('/api/phone/inbound', async (req, res) => {
             : allOut
               ? 'Our office is currently closed.'
               : 'All of our attorneys are currently with clients.';
-          phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys });
+          phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close });
           return res.type('text/xml').send(twiml(
             say(situation) +
             gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)
@@ -662,7 +796,7 @@ app.post('/api/phone/inbound', async (req, res) => {
         }
 
         // After hours or always-on mode
-        phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys });
+        phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close });
         return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
       }
     } catch (e) {
@@ -725,10 +859,30 @@ app.post('/api/phone/gather', async (req, res) => {
     session.intent = speech;
     const lower = speech.toLowerCase();
     const wantsAppt = /appoint|schedul|meet|come in|visit|in.?person|office|see/.test(lower);
-    session.phase = wantsAppt ? 'appointment' : 'intake';
-    session.step  = 0;
-    const steps = wantsAppt ? PHONE_APPT_STEPS : PHONE_INTAKE_STEPS;
-    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[0].prompt)));
+    if (wantsAppt) {
+      session.phase = 'appointment';
+      session.step  = 0;
+      // Check all attorney calendars and find real open slots
+      const primaryCal = session.attorneys?.find(a => a.calendar_url)?.calendar_url || null;
+      const slots = await findAvailableSlots({
+        calendarUrl: primaryCal,
+        tz:       session.firmTz    || 'America/Chicago',
+        workOpen: session.firmOpen  || '09:00',
+        workClose: session.firmClose || '17:00',
+      });
+      session.availableSlots = slots;
+      if (slots.length > 0) {
+        const opts = slots.map((s, i) => `Option ${i + 1}: ${s.label}`).join('. ');
+        const slotPrompt = `Great! I checked our schedule and have ${slots.length} open times for you: ${opts}. Which works best — just say option 1, 2, ${slots.length > 2 ? '3,' : ''} or another choice?`;
+        return res.type('text/xml').send(twiml(gather(gatherUrl, slotPrompt)));
+      }
+      // No calendar or fully booked — fall back to free-form
+      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_APPT_STEPS[0].prompt)));
+    } else {
+      session.phase = 'intake';
+      session.step  = 0;
+      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTAKE_STEPS[0].prompt)));
+    }
   }
 
   // ── Intake: message + details for attorney follow-up ─────────────────────
@@ -778,39 +932,65 @@ app.post('/api/phone/gather', async (req, res) => {
 
   // ── Appointment: schedule in-person visit ─────────────────────────────────
   if (session.phase === 'appointment') {
-    const steps = PHONE_APPT_STEPS;
-    session[steps[session.step].field] = speech;
-    session.step += 1;
+    const hasSlots = !!(session.availableSlots?.length);
+    let done = false;
 
-    if (session.step >= steps.length) {
-      const summary =
-        `📅 APPOINTMENT REQUEST\n` +
-        `Name:    ${session.name}\n` +
-        `Day:     ${session.apptDay}\n` +
-        `Time:    ${session.apptTime}\n` +
-        `Matter:  ${session.apptMatter}\n` +
-        `Phone:   ${session.phone}\n` +
-        `Email:   ${session.email}\n` +
-        `Requested: ${new Date().toLocaleString()}`;
-      console.log('\n── APPOINTMENT REQUEST ──────────\n' + summary + '\n────────────────────────────────');
-      const notifyTargets = [...new Set([
-        ...(session.attorneys?.map(a => a.email).filter(Boolean) || []),
-        ...(NOTIFY_EMAIL ? [NOTIFY_EMAIL] : []),
-      ])];
+    if (hasSlots) {
+      // Calendar-aware flow: slot was offered in routing, caller picks one
+      if (session.step === 0) {
+        const lower = speech.toLowerCase();
+        const idx = /\b(2|two|second)\b/.test(lower) ? 1
+                  : /\b(3|three|third)\b/.test(lower) ? 2
+                  : /\b(4|four|fourth)\b/.test(lower) ? 3 : 0;
+        const chosen = session.availableSlots[Math.min(idx, session.availableSlots.length - 1)];
+        session.apptSlot = chosen.iso;
+        session.apptDay  = chosen.label;
+        session.step = 1;
+        return res.type('text/xml').send(twiml(gather(gatherUrl,
+          `Perfect! I have you down for ${chosen.label}. In a few words, what will this appointment be about — for example, a car accident, injury case, or divorce?`
+        )));
+      }
+      if (session.step === 1) {
+        session.apptMatter = speech;
+        session.step = 2;
+        return res.type('text/xml').send(twiml(gather(gatherUrl,
+          "Almost done. What email address should we send your calendar invitation to?"
+        )));
+      }
+      if (session.step === 2) {
+        session.email = speech;
+        done = true;
+      }
+    } else {
+      // Free-form fallback (no calendar connected or fully booked)
+      const steps = PHONE_APPT_STEPS;
+      session[steps[session.step].field] = speech;
+      session.step += 1;
+      if (session.step < steps.length) {
+        return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt)));
+      }
+      done = true;
+    }
+
+    if (done) {
+      console.log(`\n── APPOINTMENT ${session.apptSlot ? 'BOOKED' : 'REQUEST'} ──\nName: ${session.name} | Slot: ${session.apptDay} | Matter: ${session.apptMatter}\n`);
       await saveLead({
         client_token: session.clientToken, name: session.name, phone: session.phone,
         email: session.email, appt_day: session.apptDay, appt_time: session.apptTime,
-        appt_matter: session.apptMatter, score: 60, source: 'appointment',
+        appt_matter: session.apptMatter, appt_slot: session.apptSlot || null,
+        score: 60, source: 'appointment',
         preferred_attorney: session.preferredAttorney || null, attorneys: session.attorneys || [],
       });
       phoneSessions.delete(callSid);
-      const holiday2 = getHolidayGreeting();
-      const holidaySuffix2 = holiday2 ? ` ${holiday2}!` : '';
-      const closing = `Thank you, ${session.name}. Your appointment request for ${session.apptDay} ${session.apptTime} has been submitted. The office will confirm with you at ${session.email} shortly. We look forward to meeting you.${holidaySuffix2} Goodbye.`;
-      return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
+      const holiday = getHolidayGreeting();
+      const holidaySuffix = holiday ? ` ${holiday}!` : '';
+      const slotConfirm = session.apptSlot
+        ? `Your appointment is confirmed for ${session.apptDay}. A calendar invitation will be sent to ${session.email}.`
+        : `Your appointment request for ${session.apptDay || 'the time you requested'} has been submitted. The office will confirm with you at ${session.email} shortly.`;
+      return res.type('text/xml').send(twiml(
+        say(`Thank you, ${session.name}. ${slotConfirm} We look forward to meeting you.${holidaySuffix} Goodbye.`) + '<Hangup/>'
+      ));
     }
-
-    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt)));
   }
 
   return res.type('text/xml').send(twiml(say("I'm sorry, something went wrong. Please call back.") + '<Hangup/>'));
@@ -827,17 +1007,32 @@ async function saveLead(leadData) {
       await dbPool.query(
         `INSERT INTO intakeai_leads
          (lead_token, client_token, name, phone, email, case_type, description,
-          urgency, appt_day, appt_time, appt_matter, score, source, preferred_attorney)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          urgency, appt_day, appt_time, appt_matter, appt_slot, score, source, preferred_attorney)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
         [leadToken, leadData.client_token||null, leadData.name||null, leadData.phone||null,
          leadData.email||null, leadData.case_type||null, leadData.description||null,
          leadData.urgency||null, leadData.appt_day||null, leadData.appt_time||null,
-         leadData.appt_matter||null, leadData.score||50, leadData.source||'phone',
+         leadData.appt_matter||null, leadData.appt_slot||null,
+         leadData.score||50, leadData.source||'phone',
          leadData.preferred_attorney||null]
       );
     } catch (e) {
       console.error('saveLead DB error:', e.message);
     }
+  }
+
+  // Send calendar invite to client if a real slot was booked
+  let icsAttachment = null;
+  if (leadData.appt_slot && leadData.email) {
+    const primaryAtty = (leadData.attorneys || [])[0];
+    icsAttachment = await sendCalendarInvite({
+      clientName:     leadData.name,
+      clientEmail:    leadData.email,
+      apptSlot:       leadData.appt_slot,
+      apptMatter:     leadData.appt_matter,
+      attorneyName:   primaryAtty?.name,
+      organizerEmail: primaryAtty?.email || FROM_EMAIL,
+    });
   }
 
   // Alert attorneys with HTML email buttons
@@ -853,10 +1048,13 @@ async function saveLead(leadData) {
       if (!atty.email) continue;
       const { html, text } = buildLeadAlertEmail({ lead, attorney: atty, APP });
       const urgent = (lead.score || 50) >= 80;
-      const subj = urgent
-        ? `🚨 URGENT — ${lead.name} needs help now (${lead.case_type || lead.appt_matter || 'appointment'})`
-        : `New ${lead.source === 'appointment' ? 'Appointment Request' : 'Lead'} — ${lead.name}`;
-      await sendHtmlEmail(atty.email, subj, html, text);
+      const subj = leadData.appt_slot
+        ? `📅 Appointment Booked — ${lead.name} (${lead.appt_day || ''})`
+        : urgent
+          ? `🚨 URGENT — ${lead.name} needs help now (${lead.case_type || lead.appt_matter || 'appointment'})`
+          : `New ${lead.source === 'appointment' ? 'Appointment Request' : 'Lead'} — ${lead.name}`;
+      // Attach .ics to attorney email too so they can add it to their calendar
+      await sendHtmlEmail(atty.email, subj, html, text, icsAttachment || []);
 
       // Track for escalation
       if (dbPool) {
@@ -1637,6 +1835,7 @@ async function initDb() {
     `);
     await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS calendar_url TEXT`);
     await dbPool.query(`ALTER TABLE intakeai_clients   ADD COLUMN IF NOT EXISTS escalation_minutes INTEGER DEFAULT 5`);
+    await dbPool.query(`ALTER TABLE intakeai_leads     ADD COLUMN IF NOT EXISTS appt_slot TIMESTAMPTZ`);
 
     // ── Attorney auth tables ──────────────────────────────────────────────────
     await dbPool.query(`
@@ -1711,6 +1910,7 @@ async function initDb() {
         appt_day           TEXT,
         appt_time          TEXT,
         appt_matter        TEXT,
+        appt_slot          TIMESTAMPTZ,
         score              INTEGER DEFAULT 50,
         source             TEXT,
         preferred_attorney TEXT,

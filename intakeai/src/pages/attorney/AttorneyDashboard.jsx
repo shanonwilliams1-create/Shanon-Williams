@@ -330,12 +330,23 @@ export default function AttorneyDashboard() {
                             <p className="text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-2">{lead.description}</p>
                           </div>
                         )}
-                        {lead.appt_day && (
+                        {lead.appt_slot ? (
+                          <div className="sm:col-span-2">
+                            <p className="text-xs font-semibold text-violet-600 mb-1">Confirmed Appointment</p>
+                            <p className="text-sm font-semibold text-violet-700 bg-violet-50 rounded-lg px-3 py-2">
+                              {lead.appt_day || new Date(lead.appt_slot).toLocaleString('en-US', {
+                                weekday: 'long', month: 'long', day: 'numeric',
+                                hour: 'numeric', minute: '2-digit', hour12: true,
+                              })}
+                              <span className="ml-2 text-xs font-normal text-violet-500">· Calendar invite sent</span>
+                            </p>
+                          </div>
+                        ) : lead.appt_day ? (
                           <div>
                             <p className="text-xs font-semibold text-gray-500 mb-1">Preferred appointment</p>
                             <p className="text-sm text-gray-700">{lead.appt_day}{lead.appt_time ? ` · ${lead.appt_time}` : ''}</p>
                           </div>
-                        )}
+                        ) : null}
                         {lead.appt_matter && (
                           <div>
                             <p className="text-xs font-semibold text-gray-500 mb-1">Appointment topic</p>
