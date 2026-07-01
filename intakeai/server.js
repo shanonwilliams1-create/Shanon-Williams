@@ -215,6 +215,58 @@ app.post('/api/intake/chat/message', async (req, res) => {
 // ── Phone Intake (Twilio Voice) ───────────────────────────────────────────────
 const phoneSessions = new Map();
 
+// ── Holiday Greetings ─────────────────────────────────────────────────────────
+function nthWeekday(year, month, weekday, n) {
+  // n > 0: nth occurrence; n === -1: last occurrence. month is 0-indexed, weekday 0=Sun.
+  if (n > 0) {
+    const d = new Date(year, month, 1);
+    let count = 0;
+    while (d.getMonth() === month) {
+      if (d.getDay() === weekday && ++count === n) return new Date(d);
+      d.setDate(d.getDate() + 1);
+    }
+  } else {
+    const d = new Date(year, month + 1, 0); // last day of month
+    while (d.getDay() !== weekday) d.setDate(d.getDate() - 1);
+    return new Date(d);
+  }
+  return null;
+}
+
+function getHolidayGreeting() {
+  const now = new Date(); now.setHours(0, 0, 0, 0);
+  const y   = now.getFullYear();
+  const WINDOW = 7; // say the greeting up to 7 days before the holiday
+
+  const holidays = [
+    { date: new Date(y, 0, 1),                   greeting: "Happy New Year"                   },
+    { date: nthWeekday(y, 0, 1, 3),              greeting: "Happy Martin Luther King Jr. Day" },
+    { date: nthWeekday(y, 1, 1, 3),              greeting: "Happy Presidents' Day"            },
+    { date: nthWeekday(y, 4, 1, -1),             greeting: "Happy Memorial Day"               },
+    { date: new Date(y, 5, 19),                  greeting: "Happy Juneteenth"                 },
+    { date: new Date(y, 6, 4),                   greeting: "Happy Fourth of July"             },
+    { date: nthWeekday(y, 8, 1, 1),              greeting: "Happy Labor Day"                  },
+    { date: nthWeekday(y, 9, 1, 2),              greeting: "Happy Columbus Day"               },
+    { date: new Date(y, 10, 11),                 greeting: "Happy Veterans Day"               },
+    { date: nthWeekday(y, 10, 4, 4),             greeting: "Happy Thanksgiving"               },
+    { date: new Date(y, 11, 25),                 greeting: "Merry Christmas"                  },
+    { date: new Date(y, 11, 31),                 greeting: "Happy New Year"                   },
+    { date: new Date(y + 1, 0, 1),               greeting: "Happy New Year"                   },
+  ];
+
+  let best = null, bestDiff = Infinity;
+  for (const h of holidays) {
+    if (!h.date) continue;
+    const hd = new Date(h.date); hd.setHours(0, 0, 0, 0);
+    const diff = (hd - now) / 86400000; // days until holiday (0 = today)
+    if (diff >= 0 && diff <= WINDOW && diff < bestDiff) {
+      bestDiff = diff;
+      best = h;
+    }
+  }
+  return best ? best.greeting : '';
+}
+
 function twiml(inner) {
   return `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
 }
@@ -584,9 +636,11 @@ app.post('/api/phone/gather', async (req, res) => {
         : `New Phone Lead — ${session.caseType} (score ${score})`;
       for (const email of notifyTargets) await sendNotification(email, subj, summary);
       phoneSessions.delete(callSid);
+      const holiday = getHolidayGreeting();
+      const holidaySuffix = holiday ? ` ${holiday}!` : '';
       const closing = urgent
-        ? `Thank you, ${session.name}. Your case has been flagged as urgent. An attorney will contact you as soon as possible. Goodbye.`
-        : `Thank you, ${session.name}. Your information has been submitted and an attorney will follow up within one business day. Goodbye.`;
+        ? `Thank you, ${session.name}. Your case has been flagged as urgent. An attorney will contact you as soon as possible.${holidaySuffix} Goodbye.`
+        : `Thank you, ${session.name}. Your information has been submitted and an attorney will follow up within one business day.${holidaySuffix} Goodbye.`;
       return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
     }
 
@@ -622,7 +676,9 @@ app.post('/api/phone/gather', async (req, res) => {
         );
       }
       phoneSessions.delete(callSid);
-      const closing = `Thank you, ${session.name}. Your appointment request for ${session.apptDay} ${session.apptTime} has been submitted. The office will confirm with you at ${session.email} shortly. We look forward to meeting you. Goodbye.`;
+      const holiday2 = getHolidayGreeting();
+      const holidaySuffix2 = holiday2 ? ` ${holiday2}!` : '';
+      const closing = `Thank you, ${session.name}. Your appointment request for ${session.apptDay} ${session.apptTime} has been submitted. The office will confirm with you at ${session.email} shortly. We look forward to meeting you.${holidaySuffix2} Goodbye.`;
       return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
     }
 
