@@ -81,7 +81,7 @@ const FAQS = [
   },
   {
     q: 'Can multiple attorneys share one IntakeAI account?',
-    a: 'Yes — the Firm plan is built for multi-attorney practices. Leads are distributed in round-robin order so every attorney gets their fair share. You control the rotation and can add or remove attorneys anytime from your admin dashboard.',
+    a: 'Yes — the Firm plan is built for practices with 5 or more attorneys. Leads are distributed in round-robin order so every attorney gets their fair share. You control the rotation and can add or remove attorneys anytime from your admin dashboard. The Firm plan supports 5 to 10 attorney profiles.',
   },
 ];
 
@@ -434,7 +434,8 @@ export default function LandingPage() {
               Multi-Attorney
             </div>
             <p className="font-bold text-xl text-gray-900 mb-1">Firm</p>
-            <p className="text-sm text-gray-500 mb-6">Built for firms with multiple attorneys sharing leads.</p>
+            <p className="text-sm text-gray-500 mb-2">For firms with <strong>5 or more attorneys</strong> sharing leads.</p>
+            <p className="text-xs text-indigo-600 font-medium mb-4">Enterprise — 5+ attorneys required</p>
             <div className="flex items-end gap-1 mb-2">
               <span className="text-4xl font-extrabold text-gray-900">$750</span>
               <span className="text-sm text-gray-500 mb-2">/month</span>
@@ -444,7 +445,7 @@ export default function LandingPage() {
             <ul className="space-y-3 mb-8 flex-1">
               {[
                 'Everything in Managed',
-                'Up to 10 attorney profiles',
+                '5–10 attorney profiles',
                 'Round-robin lead distribution',
                 'Admin dashboard & controls',
                 'Dedicated account manager',
