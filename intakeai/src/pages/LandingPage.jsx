@@ -77,7 +77,11 @@ const FAQS = [
   },
   {
     q: 'How much does IntakeAI cost?',
-    a: 'Self-Serve is $250/month — no setup fee, cancel anytime. Managed is $200/month plus a one-time $500 setup retainer (first month: $700, then $200/month). Both plans include unlimited intakes and a 14-day free trial.',
+    a: 'Self-Serve is $250/month — no setup fee, cancel anytime. Managed is $200/month plus a one-time $500 setup retainer (first month: $700, then $200/month). Firm is $500/month — includes multiple attorney profiles, round-robin lead distribution, and a dedicated account manager. All plans include unlimited intakes and a 14-day free trial.',
+  },
+  {
+    q: 'Can multiple attorneys share one IntakeAI account?',
+    a: 'Yes — the Firm plan is built for multi-attorney practices. Leads are distributed in round-robin order so every attorney gets their fair share. You control the rotation and can add or remove attorneys anytime from your admin dashboard.',
   },
 ];
 
@@ -348,14 +352,14 @@ export default function LandingPage() {
           <h2 className="text-3xl md:text-4xl font-bold mb-3">Simple, Transparent Pricing</h2>
           <p className="text-gray-500">No per-lead fees. No surprises. Cancel anytime.</p>
         </div>
-        <div className="grid md:grid-cols-2 gap-8 max-w-3xl mx-auto">
+        <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
 
           {/* Self-Serve */}
           <div className="rounded-2xl p-8 border border-gray-200 bg-white shadow-sm flex flex-col">
             <p className="font-bold text-xl text-gray-900 mb-1">Self-Serve</p>
             <p className="text-sm text-gray-500 mb-6">Set it up yourself — no retainer required.</p>
             <div className="flex items-end gap-1 mb-2">
-              <span className="text-5xl font-extrabold text-gray-900">$250</span>
+              <span className="text-4xl font-extrabold text-gray-900">$250</span>
               <span className="text-sm text-gray-500 mb-2">/month</span>
             </div>
             <p className="text-xs text-gray-400 mb-8">No setup fee · Cancel anytime</p>
@@ -393,7 +397,7 @@ export default function LandingPage() {
             <p className="font-bold text-xl text-white mb-1">Managed</p>
             <p className="text-sm text-violet-200 mb-6">We handle setup, onboarding, and installation for you.</p>
             <div className="flex items-end gap-1 mb-2">
-              <span className="text-5xl font-extrabold text-white">$200</span>
+              <span className="text-4xl font-extrabold text-white">$200</span>
               <span className="text-sm text-violet-200 mb-2">/month</span>
             </div>
             <p className="text-xs text-violet-300 mb-1">+ $500 one-time setup retainer</p>
@@ -420,6 +424,44 @@ export default function LandingPage() {
               {checkoutLoading === 'managed'
                 ? <><span className="w-4 h-4 border-2 border-violet-300 border-t-violet-700 rounded-full animate-spin" /> Redirecting…</>
                 : 'Get Started — Managed Setup'}
+            </button>
+          </div>
+
+          {/* Firm */}
+          <div className="rounded-2xl p-8 border border-gray-200 bg-white shadow-sm flex flex-col relative">
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full
+                            bg-indigo-600 text-white text-xs font-bold whitespace-nowrap">
+              Multi-Attorney
+            </div>
+            <p className="font-bold text-xl text-gray-900 mb-1">Firm</p>
+            <p className="text-sm text-gray-500 mb-6">Built for firms with multiple attorneys sharing leads.</p>
+            <div className="flex items-end gap-1 mb-2">
+              <span className="text-4xl font-extrabold text-gray-900">$500</span>
+              <span className="text-sm text-gray-500 mb-2">/month</span>
+            </div>
+            <p className="text-xs text-gray-400 mb-8">Includes setup · Up to 10 attorneys</p>
+            <ul className="space-y-3 mb-8 flex-1">
+              {[
+                'Everything in Managed',
+                'Up to 10 attorney profiles',
+                'Round-robin lead distribution',
+                'Admin dashboard & controls',
+                'Dedicated account manager',
+                'Priority phone support',
+              ].map((f) => (
+                <li key={f} className="flex items-center gap-2 text-sm text-gray-600">
+                  <span className="text-indigo-600 font-bold">✓</span> {f}
+                </li>
+              ))}
+            </ul>
+            <button onClick={() => startCheckout('firm')}
+                    disabled={checkoutLoading === 'firm'}
+                    className="w-full py-3.5 rounded-xl font-semibold text-sm
+                               bg-indigo-600 text-white hover:bg-indigo-700
+                               disabled:opacity-70 transition-colors flex items-center justify-center gap-2">
+              {checkoutLoading === 'firm'
+                ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Redirecting…</>
+                : 'Get Started — Firm Plan'}
             </button>
           </div>
 

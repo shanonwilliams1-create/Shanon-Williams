@@ -217,6 +217,7 @@ const STRIPE_SECRET          = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_PRICE_SELFSERVE = process.env.STRIPE_PRICE_SELFSERVE || '';
 const STRIPE_PRICE_MANAGED   = process.env.STRIPE_PRICE_MANAGED || '';
 const STRIPE_PRICE_SETUP     = process.env.STRIPE_PRICE_MANAGED_SETUP || '';
+const STRIPE_PRICE_FIRM      = process.env.STRIPE_PRICE_FIRM || '';
 const APP_URL = process.env.APP_URL || 'https://leadforge-production-3ee8.up.railway.app';
 
 app.post('/api/stripe/checkout', async (req, res) => {
@@ -246,8 +247,12 @@ app.post('/api/stripe/checkout', async (req, res) => {
         params['subscription_data[add_invoice_items][0][price]']    = STRIPE_PRICE_SETUP;
         params['subscription_data[add_invoice_items][0][quantity]'] = '1';
       }
+    } else if (plan === 'firm') {
+      if (!STRIPE_PRICE_FIRM) return res.status(503).json({ error: 'price_not_configured' });
+      params['line_items[0][price]']    = STRIPE_PRICE_FIRM;
+      params['line_items[0][quantity]'] = '1';
     } else {
-      return res.status(400).json({ error: 'Plan must be "selfserve" or "managed"' });
+      return res.status(400).json({ error: 'Plan must be "selfserve", "managed", or "firm"' });
     }
 
     const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
