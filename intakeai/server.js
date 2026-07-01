@@ -259,6 +259,7 @@ app.get('/status/:token', async (req, res) => {
     const statuses = [
       { value: 'available', label: '✅ Available',        color: '#16a34a', bg: '#f0fdf4', border: '#86efac' },
       { value: 'busy',      label: '🔴 With a Client',    color: '#dc2626', bg: '#fef2f2', border: '#fca5a5' },
+      { value: 'court',     label: '⚖️ In Court',         color: '#92400e', bg: '#fffbeb', border: '#fcd34d' },
       { value: 'out',       label: '🚫 Out of Office',    color: '#6b7280', bg: '#f9fafb', border: '#d1d5db' },
     ];
     const html = `<!DOCTYPE html>
@@ -306,7 +307,7 @@ app.get('/status/:token', async (req, res) => {
 
 app.post('/api/attorney/status/:token', async (req, res) => {
   const status = req.body?.status;
-  if (!['available', 'busy', 'out'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  if (!['available', 'busy', 'court', 'out'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
   if (!dbPool) return res.status(503).json({ error: 'No database' });
   try {
     await dbPool.query(
@@ -355,7 +356,7 @@ app.post('/api/phone/inbound', async (req, res) => {
 
       if (attorneys.length > 0) {
         const available = attorneys.filter(a => a.status === 'available' && a.phone);
-        const allBusy   = attorneys.every(a => a.status === 'busy' || a.status === 'out');
+        const allUnavailable = attorneys.every(a => a.status !== 'available');
 
         if (duringHours && available.length > 0) {
           // Route to next available attorney
@@ -370,10 +371,16 @@ app.post('/api/phone/inbound', async (req, res) => {
           ));
         }
 
-        if (duringHours && allBusy) {
-          // All attorneys busy — AI takes a message, notifies all of them
-          const msg = `Thank you for calling. All of our attorneys are currently with clients. I'll collect your information and someone will call you back shortly. What's your name?`;
-          phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone', clientToken, attorneys, allBusy: true });
+        if (duringHours && allUnavailable) {
+          // Determine best message based on statuses
+          const inCourt = attorneys.some(a => a.status === 'court');
+          const allOut  = attorneys.every(a => a.status === 'out');
+          const msg = inCourt
+            ? `Thank you for calling. Our attorney is currently in court. I'll collect your information and someone will call you back as soon as possible. What's your name?`
+            : allOut
+              ? `Thank you for calling. Our office is currently closed. I'll collect your information and an attorney will follow up with you shortly. What's your name?`
+              : `Thank you for calling. All of our attorneys are currently with clients. I'll collect your information and someone will call you back shortly. What's your name?`;
+          phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone', clientToken, attorneys, allUnavailable: true });
           return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, msg)));
         }
 
