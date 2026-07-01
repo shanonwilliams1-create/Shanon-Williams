@@ -231,13 +231,26 @@ function gather(action, text) {
   );
 }
 
-const PHONE_STEPS = [
-  { field: null,          prompt: "Thank you for calling. I'm the virtual intake assistant. I'll collect a few quick details so an attorney can review your case. What's your name?" },
-  { field: 'name',        prompt: "Thank you. What type of legal issue are you dealing with? For example — car accident, criminal charge, divorce, or immigration." },
-  { field: 'caseType',    prompt: "Got it. Can you briefly describe what happened and when?" },
-  { field: 'description', prompt: "Thank you. Is this time-sensitive? For example, do you have a court date coming up, were you recently arrested, or do you need help right away?" },
-  { field: 'urgency',     prompt: "Almost done. What email address should we send your case summary to?" },
-  { field: 'email',       prompt: null },
+const PHONE_INTRO_PROMPT =
+  "Thank you for calling. I'm the virtual intake assistant. Can I start with your name?";
+
+const PHONE_ROUTING_PROMPT = (name) =>
+  `Hi ${name || 'there'}! Are you hoping to speak with an attorney, or would you like to schedule an in-person appointment at the office?`;
+
+// Path A — leave a message / intake for attorney follow-up
+const PHONE_INTAKE_STEPS = [
+  { field: 'caseType',    prompt: "What type of legal issue are you dealing with? For example — car accident, criminal charge, divorce, or immigration." },
+  { field: 'description', prompt: "Got it. Can you briefly describe what happened and when?" },
+  { field: 'urgency',     prompt: "Thank you. Is this time-sensitive? For example, do you have a court date coming up, were you recently arrested, or do you need help right away?" },
+  { field: 'email',       prompt: "Almost done. What email address should we send your case summary to?" },
+];
+
+// Path B — schedule an in-person appointment
+const PHONE_APPT_STEPS = [
+  { field: 'apptDay',    prompt: "Of course! What day works best for you — for example, Monday, Wednesday, or Friday?" },
+  { field: 'apptTime',   prompt: "And do you prefer morning or afternoon?" },
+  { field: 'apptMatter', prompt: "Got it. In a few words, what will this appointment be about? For example, a car accident, divorce, or a criminal matter." },
+  { field: 'email',      prompt: "Last thing — what email should we send your appointment confirmation to?" },
 ];
 
 function isBusinessHours(tz = 'America/Chicago', open = '09:00', close = '17:00') {
@@ -460,18 +473,21 @@ app.post('/api/phone/inbound', async (req, res) => {
           // Determine best message based on statuses
           const inCourt = attorneys.some(a => a.status === 'court');
           const allOut  = attorneys.every(a => a.status === 'out');
-          const msg = inCourt
-            ? `Thank you for calling. Our attorney is currently in court. I'll collect your information and someone will call you back as soon as possible. What's your name?`
+          const situation = inCourt
+            ? 'Our attorney is currently in court.'
             : allOut
-              ? `Thank you for calling. Our office is currently closed. I'll collect your information and an attorney will follow up with you shortly. What's your name?`
-              : `Thank you for calling. All of our attorneys are currently with clients. I'll collect your information and someone will call you back shortly. What's your name?`;
-          phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone', clientToken, attorneys, allUnavailable: true });
-          return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, msg)));
+              ? 'Our office is currently closed.'
+              : 'All of our attorneys are currently with clients.';
+          phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys });
+          return res.type('text/xml').send(twiml(
+            say(situation) +
+            gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)
+          ));
         }
 
         // After hours or always-on mode
-        phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone', clientToken, attorneys });
-        return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
+        phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys });
+        return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
       }
     } catch (e) {
       console.error('Multi-attorney routing error:', e.message);
@@ -488,8 +504,8 @@ app.post('/api/phone/inbound', async (req, res) => {
   }
 
   console.log(`Phone: AI intake (mode=${mode}) from ${from}`);
-  phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone' });
-  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
+  phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone' });
+  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
 });
 
 // If the office doesn't answer during business hours, fall back to AI intake
@@ -502,8 +518,8 @@ app.post('/api/phone/dial-fallback', (req, res) => {
   }
   // No answer / busy / failed — run AI intake
   console.log(`Phone: no answer (${dialStatus}), starting AI intake for ${from}`);
-  phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone-fallback' });
-  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
+  phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone-fallback' });
+  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
 });
 
 app.post('/api/phone/gather', async (req, res) => {
@@ -517,39 +533,103 @@ app.post('/api/phone/gather', async (req, res) => {
     );
   }
 
-  const cur = PHONE_STEPS[session.step];
-  if (cur.field) session[cur.field] = speech;
-  session.step += 1;
+  const gatherUrl = `/api/phone/gather?sid=${encodeURIComponent(callSid)}`;
 
-  if (session.step >= PHONE_STEPS.length - 1) {
-    const score  = scoreIntake(session);
-    const urgent = score >= 80;
-    const summary =
-      `New IntakeAI Phone Lead (score: ${score}${urgent ? ' — URGENT' : ''})\n` +
-      `Name:        ${session.name}\n` +
-      `Case Type:   ${session.caseType}\n` +
-      `Description: ${session.description}\n` +
-      `Urgency:     ${session.urgency}\n` +
-      `Phone:       ${session.phone}\n` +
-      `Email:       ${session.email}\n` +
-      `Source:      phone\n` +
-      `Time:        ${new Date().toLocaleString()}`;
-    console.log('\n── PHONE LEAD ──────────────────\n' + summary + '\n────────────────────────────────');
-    if (NOTIFY_EMAIL) {
+  // ── Intro: collect caller's name ──────────────────────────────────────────
+  if (session.phase === 'intro') {
+    session.name  = speech.split(' ')[0] || speech;
+    session.phase = 'routing';
+    return res.type('text/xml').send(twiml(
+      gather(gatherUrl, PHONE_ROUTING_PROMPT(session.name))
+    ));
+  }
+
+  // ── Routing: speak with attorney or book in-person appointment ────────────
+  if (session.phase === 'routing') {
+    session.intent = speech;
+    const lower = speech.toLowerCase();
+    const wantsAppt = /appoint|schedul|meet|come in|visit|in.?person|office|see/.test(lower);
+    session.phase = wantsAppt ? 'appointment' : 'intake';
+    session.step  = 0;
+    const steps = wantsAppt ? PHONE_APPT_STEPS : PHONE_INTAKE_STEPS;
+    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[0].prompt)));
+  }
+
+  // ── Intake: message + details for attorney follow-up ─────────────────────
+  if (session.phase === 'intake') {
+    const steps = PHONE_INTAKE_STEPS;
+    session[steps[session.step].field] = speech;
+    session.step += 1;
+
+    if (session.step >= steps.length) {
+      const score  = scoreIntake(session);
+      const urgent = score >= 80;
+      const summary =
+        `New IntakeAI Phone Lead (score: ${score}${urgent ? ' — URGENT' : ''})\n` +
+        `Name:        ${session.name}\n` +
+        `Case Type:   ${session.caseType}\n` +
+        `Description: ${session.description}\n` +
+        `Urgency:     ${session.urgency}\n` +
+        `Phone:       ${session.phone}\n` +
+        `Email:       ${session.email}\n` +
+        `Source:      ${session.source || 'phone'}\n` +
+        `Time:        ${new Date().toLocaleString()}`;
+      console.log('\n── PHONE LEAD ──────────────────\n' + summary + '\n────────────────────────────────');
+      const notifyTargets = [...new Set([
+        ...(session.attorneys?.map(a => a.email).filter(Boolean) || []),
+        ...(NOTIFY_EMAIL ? [NOTIFY_EMAIL] : []),
+      ])];
       const subj = urgent
         ? `URGENT Phone Lead — ${session.caseType} (score ${score})`
         : `New Phone Lead — ${session.caseType} (score ${score})`;
-      await sendNotification(NOTIFY_EMAIL, subj, summary);
+      for (const email of notifyTargets) await sendNotification(email, subj, summary);
+      phoneSessions.delete(callSid);
+      const closing = urgent
+        ? `Thank you, ${session.name}. Your case has been flagged as urgent. An attorney will contact you as soon as possible. Goodbye.`
+        : `Thank you, ${session.name}. Your information has been submitted and an attorney will follow up within one business day. Goodbye.`;
+      return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
     }
-    phoneSessions.delete(callSid);
-    const closing = urgent
-      ? `Thank you, ${session.name}. Your case has been flagged as urgent. An attorney will contact you as soon as possible. Goodbye.`
-      : `Thank you, ${session.name}. Your intake has been submitted. An attorney will follow up within one business day. Goodbye.`;
-    return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
+
+    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt)));
   }
 
-  const next = PHONE_STEPS[session.step];
-  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, next.prompt)));
+  // ── Appointment: schedule in-person visit ─────────────────────────────────
+  if (session.phase === 'appointment') {
+    const steps = PHONE_APPT_STEPS;
+    session[steps[session.step].field] = speech;
+    session.step += 1;
+
+    if (session.step >= steps.length) {
+      const summary =
+        `📅 APPOINTMENT REQUEST\n` +
+        `Name:    ${session.name}\n` +
+        `Day:     ${session.apptDay}\n` +
+        `Time:    ${session.apptTime}\n` +
+        `Matter:  ${session.apptMatter}\n` +
+        `Phone:   ${session.phone}\n` +
+        `Email:   ${session.email}\n` +
+        `Requested: ${new Date().toLocaleString()}`;
+      console.log('\n── APPOINTMENT REQUEST ──────────\n' + summary + '\n────────────────────────────────');
+      const notifyTargets = [...new Set([
+        ...(session.attorneys?.map(a => a.email).filter(Boolean) || []),
+        ...(NOTIFY_EMAIL ? [NOTIFY_EMAIL] : []),
+      ])];
+      for (const email of notifyTargets) {
+        await sendNotification(
+          email,
+          `Appointment Request — ${session.name} (${session.apptDay}, ${session.apptTime})`,
+          summary
+        );
+      }
+      phoneSessions.delete(callSid);
+      const closing = `Thank you, ${session.name}. Your appointment request for ${session.apptDay} ${session.apptTime} has been submitted. The office will confirm with you at ${session.email} shortly. We look forward to meeting you. Goodbye.`;
+      return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
+    }
+
+    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt)));
+  }
+
+  return res.type('text/xml').send(twiml(say("I'm sorry, something went wrong. Please call back.") + '<Hangup/>'));
 });
 
 // ── Onboarding ───────────────────────────────────────────────────────────────
