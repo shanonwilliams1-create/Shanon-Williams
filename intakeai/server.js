@@ -247,32 +247,154 @@ function isBusinessHours(tz = 'America/Chicago', open = '09:00', close = '17:00'
   return day >= 1 && day <= 5 && hhmm >= open && hhmm < close;
 }
 
-app.post('/api/phone/inbound', (req, res) => {
+// ── Attorney Status Pages ─────────────────────────────────────────────────────
+app.get('/status/:token', async (req, res) => {
+  if (!dbPool) return res.status(503).send('Service unavailable');
+  try {
+    const { rows } = await dbPool.query(
+      'SELECT * FROM intakeai_attorneys WHERE attorney_token = $1', [req.params.token]
+    );
+    if (!rows.length) return res.status(404).send('Attorney not found');
+    const a = rows[0];
+    const statuses = [
+      { value: 'available', label: '✅ Available',        color: '#16a34a', bg: '#f0fdf4', border: '#86efac' },
+      { value: 'busy',      label: '🔴 With a Client',    color: '#dc2626', bg: '#fef2f2', border: '#fca5a5' },
+      { value: 'out',       label: '🚫 Out of Office',    color: '#6b7280', bg: '#f9fafb', border: '#d1d5db' },
+    ];
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>My Status — IntakeAI</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{background:white;border-radius:20px;padding:32px 24px;max-width:360px;width:100%;box-shadow:0 4px 24px rgba(0,0,0,.08);text-align:center}
+    .logo{font-size:13px;font-weight:600;color:#7c3aed;letter-spacing:.5px;margin-bottom:20px}
+    h2{font-size:22px;font-weight:700;color:#111827;margin-bottom:4px}
+    .sub{font-size:14px;color:#6b7280;margin-bottom:28px}
+    .btn{display:block;width:100%;padding:18px 20px;border-radius:14px;border:2px solid transparent;
+         font-size:17px;font-weight:600;cursor:pointer;margin-bottom:12px;transition:all .15s;text-align:center}
+    .btn:active{transform:scale(.97)}
+    .last{font-size:12px;color:#9ca3af;margin-top:16px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">⚖️ IntakeAI</div>
+    <h2>${a.name || 'Attorney'}</h2>
+    <p class="sub">Tap to update your status — callers are routed based on this</p>
+    ${statuses.map(s => `
+    <form method="POST" action="/api/attorney/status/${req.params.token}?_method=POST">
+      <button type="submit" name="status" value="${s.value}" class="btn"
+        style="background:${a.status === s.value ? s.bg : 'white'};
+               color:${s.color};
+               border-color:${a.status === s.value ? s.border : '#e5e7eb'}">
+        ${s.label}${a.status === s.value ? ' ◀ current' : ''}
+      </button>
+    </form>`).join('')}
+    <p class="last">Last updated: ${new Date(a.last_status_at).toLocaleString()}</p>
+  </div>
+</body>
+</html>`;
+    res.type('text/html').send(html);
+  } catch (e) {
+    res.status(500).send('Error loading status page');
+  }
+});
+
+app.post('/api/attorney/status/:token', async (req, res) => {
+  const status = req.body?.status;
+  if (!['available', 'busy', 'out'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    await dbPool.query(
+      'UPDATE intakeai_attorneys SET status=$1, last_status_at=NOW() WHERE attorney_token=$2',
+      [status, req.params.token]
+    );
+    res.redirect(`/status/${req.params.token}`);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/attorney/status/:token', async (req, res) => {
+  if (!dbPool) return res.json({ status: 'available' });
+  try {
+    const { rows } = await dbPool.query(
+      'SELECT status, name FROM intakeai_attorneys WHERE attorney_token=$1', [req.params.token]
+    );
+    res.json(rows[0] || { status: 'available' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Phone Intake ──────────────────────────────────────────────────────────────
+app.post('/api/phone/inbound', async (req, res) => {
   const callSid  = req.body?.CallSid;
   const from     = req.body?.From || '';
   if (!callSid) return res.status(400).send('Missing CallSid');
 
-  // Webhook URL params set per-firm in Twilio console:
-  //   ?forward=+15551234567&tz=America/Chicago&open=09:00&close=17:00
-  const forwardTo = req.query.forward || '';
-  const tz        = req.query.tz      || 'America/Chicago';
-  const open      = req.query.open    || '09:00';
-  const close     = req.query.close   || '17:00';
+  const clientToken = req.query.token   || '';
+  const forwardTo   = req.query.forward || '';
+  const tz          = req.query.tz      || 'America/Chicago';
+  const open        = req.query.open    || '09:00';
+  const close       = req.query.close   || '17:00';
+  const mode        = req.query.mode    || 'afterhours';
+  const duringHours = mode !== 'always' && isBusinessHours(tz, open, close);
 
-  // mode=always  → AI answers every call 24/7 (replaces receptionist)
-  // mode=afterhours (default) → AI only after hours, forwards during business hours
-  const mode = req.query.mode || 'afterhours';
+  // Multi-attorney routing — check live availability status
+  if (clientToken && dbPool) {
+    try {
+      const { rows: attorneys } = await dbPool.query(
+        `SELECT * FROM intakeai_attorneys WHERE client_token=$1 ORDER BY rotation_order ASC, id ASC`,
+        [clientToken]
+      );
 
-  if (mode !== 'always' && forwardTo && isBusinessHours(tz, open, close)) {
-    // Business hours — ring their real office number
+      if (attorneys.length > 0) {
+        const available = attorneys.filter(a => a.status === 'available' && a.phone);
+        const allBusy   = attorneys.every(a => a.status === 'busy' || a.status === 'out');
+
+        if (duringHours && available.length > 0) {
+          // Route to next available attorney
+          const atty = available[0];
+          await dbPool.query(
+            `UPDATE intakeai_attorneys SET rotation_order = rotation_order + 100 WHERE id=$1`, [atty.id]
+          );
+          console.log(`Phone: routing ${from} → ${atty.name} (${atty.phone})`);
+          return res.type('text/xml').send(twiml(
+            say('Please hold while we connect you.') +
+            `<Dial timeout="20" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}&token=${encodeURIComponent(clientToken)}" method="POST">${atty.phone}</Dial>`
+          ));
+        }
+
+        if (duringHours && allBusy) {
+          // All attorneys busy — AI takes a message, notifies all of them
+          const msg = `Thank you for calling. All of our attorneys are currently with clients. I'll collect your information and someone will call you back shortly. What's your name?`;
+          phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone', clientToken, attorneys, allBusy: true });
+          return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, msg)));
+        }
+
+        // After hours or always-on mode
+        phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone', clientToken, attorneys });
+        return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
+      }
+    } catch (e) {
+      console.error('Multi-attorney routing error:', e.message);
+    }
+  }
+
+  // Single-attorney / legacy routing
+  if (duringHours && forwardTo) {
     console.log(`Phone: business hours, forwarding ${from} → ${forwardTo}`);
     return res.type('text/xml').send(twiml(
-      `<Say voice="Polly.Joanna">Please hold while we connect your call.</Say>` +
+      say('Please hold while we connect your call.') +
       `<Dial timeout="20" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}" method="POST">${forwardTo}</Dial>`
     ));
   }
 
-  // Always-on or after hours — AI intake
   console.log(`Phone: AI intake (mode=${mode}) from ${from}`);
   phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone' });
   res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
@@ -351,6 +473,9 @@ app.post('/api/onboarding/save', async (req, res) => {
   const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   const APP = process.env.APP_URL || 'https://www.myintakeai.com';
 
+  const attorneyToken = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  const statusPageUrl = `${APP}/status/${attorneyToken}`;
+
   if (dbPool) {
     try {
       await dbPool.query(
@@ -362,6 +487,12 @@ app.post('/api/onboarding/save', async (req, res) => {
         [token, plan, firmName, website, Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas,
          forwardNumber, timezone, businessOpen, businessClose, callMode,
          attorneyName, attorneyEmail, attorneyPhone]
+      );
+      // Create the attorney record so they get a live status toggle page
+      await dbPool.query(
+        `INSERT INTO intakeai_attorneys (attorney_token, client_token, name, phone, email, rotation_order)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [attorneyToken, token, attorneyName || firmName, attorneyPhone || '', attorneyEmail || '', 0]
       );
     } catch (e) {
       console.error('Onboarding save error:', e.message);
@@ -379,6 +510,13 @@ Your ${plan} account is now active. Here are your setup details:
 FIRM: ${firmName}
 PLAN: ${plan}
 PRACTICE AREAS: ${Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas || 'Not specified'}
+
+YOUR ATTORNEY STATUS PAGE (bookmark this on your phone):
+${statusPageUrl}
+
+Tap this link any time to toggle your status — Available, With a Client, or Out of Office.
+When callers ring your IntakeAI number, the AI checks your status in real time and routes
+accordingly (forwarding to you when available, or taking a message when you're busy or out).
 
 TWILIO PHONE WEBHOOK URL:
 ${webhookUrl}
@@ -407,7 +545,7 @@ ${APP}`;
   }
 
   console.log(`Onboarding complete: ${firmName} (${plan}) → ${attorneyEmail}`);
-  res.json({ ok: true, token });
+  res.json({ ok: true, token, attorneyToken, statusPageUrl });
 });
 
 // ── Stripe Checkout ───────────────────────────────────────────────────────────
@@ -670,6 +808,19 @@ async function initDb() {
         attorney_email  TEXT,
         attorney_phone  TEXT,
         created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_attorneys (
+        id              SERIAL PRIMARY KEY,
+        attorney_token  TEXT UNIQUE NOT NULL,
+        client_token    TEXT NOT NULL,
+        name            TEXT,
+        phone           TEXT,
+        email           TEXT,
+        status          TEXT DEFAULT 'available',
+        rotation_order  INTEGER DEFAULT 0,
+        last_status_at  TIMESTAMPTZ DEFAULT NOW()
       )
     `);
     await dbPool.query(`

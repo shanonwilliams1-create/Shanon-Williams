@@ -210,7 +210,7 @@ function StepPhone({ data, update }) {
   );
 }
 
-function DoneScreen({ plan, data, webhookUrl }) {
+function DoneScreen({ plan, data, webhookUrl, statusPageUrl }) {
   const isManaged = plan === 'Managed' || plan === 'Firm';
 
   return (
@@ -242,6 +242,21 @@ function DoneScreen({ plan, data, webhookUrl }) {
               Check that inbox — it includes everything you need.
             </p>
           </div>
+
+          {/* Attorney status page */}
+          {statusPageUrl && (
+            <div className="bg-white border border-gray-200 rounded-xl p-6">
+              <h3 className="font-semibold text-gray-900 mb-1">Your Attorney Status Page</h3>
+              <p className="text-sm text-gray-500 mb-3">
+                Bookmark this link on your phone. Tap it any time to set yourself as Available,
+                With a Client, or Out of Office — IntakeAI routes callers based on your live status.
+              </p>
+              <CopyBox value={statusPageUrl} />
+              <p className="text-xs text-gray-400 mt-2">
+                Open on your phone → tap "Add to Home Screen" for instant one-tap access.
+              </p>
+            </div>
+          )}
 
           {/* Phone webhook */}
           {webhookUrl && (
@@ -297,6 +312,7 @@ export default function OnboardingPage() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [token, setToken] = useState(null);
+  const [statusPageUrl, setStatusPageUrl] = useState('');
   const [data, setData] = useState({
     firmName: '',
     website: '',
@@ -334,6 +350,7 @@ export default function OnboardingPage() {
       });
       const json = await res.json();
       setToken(json.token || 'ok');
+      if (json.statusPageUrl) setStatusPageUrl(json.statusPageUrl);
       setStep(4);
     } catch {
       alert('Something went wrong. Please try again.');
@@ -346,7 +363,7 @@ export default function OnboardingPage() {
   const canSubmit = data.attorneyEmail.trim().length > 0;
 
   if (step === 4) {
-    return <DoneScreen plan={planLabel} data={data} webhookUrl={webhookUrl} />;
+    return <DoneScreen plan={planLabel} data={data} webhookUrl={webhookUrl} statusPageUrl={statusPageUrl} />;
   }
 
   return (
