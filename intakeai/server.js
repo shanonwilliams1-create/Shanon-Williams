@@ -247,6 +247,83 @@ function isBusinessHours(tz = 'America/Chicago', open = '09:00', close = '17:00'
   return day >= 1 && day <= 5 && hhmm >= open && hhmm < close;
 }
 
+// ── Calendar Integration (iCal — universal: Google, Outlook, Apple, Yahoo, Calendly, Clio, etc.) ──
+
+function parseIcalDate(str) {
+  if (!str) return null;
+  str = str.trim();
+  // All-day: 20260701
+  if (/^\d{8}$/.test(str)) {
+    return new Date(`${str.slice(0,4)}-${str.slice(4,6)}-${str.slice(6,8)}T00:00:00`);
+  }
+  // Datetime: 20260701T090000Z or 20260701T090000
+  const m = str.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z?)$/);
+  if (!m) return null;
+  const iso = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${m[7] || ''}`;
+  return new Date(iso);
+}
+
+function parseIcalEvents(ical) {
+  const events = [];
+  // Split on BEGIN:VEVENT, skip first chunk (header)
+  const blocks = ical.split(/\r?\nBEGIN:VEVENT/);
+  for (let i = 1; i < blocks.length; i++) {
+    const block = blocks[i];
+    // Unfold long lines (RFC 5545: continuation lines start with space/tab)
+    const unfolded = block.replace(/\r?\n[ \t]/g, '');
+    const get = (key) => {
+      const m = unfolded.match(new RegExp(`\\n${key}(?:;[^:]*)?:([^\\r\\n]+)`, 'i'));
+      return m ? m[1].trim() : '';
+    };
+    const summary  = get('SUMMARY');
+    const startRaw = get('DTSTART');
+    const endRaw   = get('DTEND') || get('DURATION'); // DURATION fallback is rare, skip for now
+    const status   = get('STATUS'); // CONFIRMED, TENTATIVE, CANCELLED
+    if (status === 'CANCELLED') continue;
+    const start = parseIcalDate(startRaw);
+    const end   = parseIcalDate(endRaw);
+    if (start && end) events.push({ summary, start, end });
+  }
+  return events;
+}
+
+function inferStatusFromEvent(summary) {
+  const s = summary.toLowerCase();
+  if (/court|hearing|trial|arraignment|deposition|arbitration|mediation|docket|sentencing|plea/.test(s))
+    return 'court';
+  if (/vacation|out of office|ooo|pto|holiday|leave|sick|personal day|time off/.test(s))
+    return 'out';
+  if (/meeting|consult|client|conference|call|appointment|intake|interview/.test(s))
+    return 'busy';
+  // Any other calendar event during the day = with someone
+  return 'busy';
+}
+
+async function fetchCalendarStatus(calendarUrl) {
+  if (!calendarUrl) return null;
+  try {
+    const r = await fetch(calendarUrl, {
+      headers: { 'User-Agent': 'IntakeAI-Calendar/1.0' },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!r.ok) return null;
+    const ical = await r.text();
+    const now  = new Date();
+    const events = parseIcalEvents(ical);
+    for (const ev of events) {
+      if (ev.start <= now && now < ev.end) {
+        const status = inferStatusFromEvent(ev.summary);
+        console.log(`Calendar: active event "${ev.summary}" → status=${status}`);
+        return { status, eventTitle: ev.summary };
+      }
+    }
+    return null; // No active event right now
+  } catch (e) {
+    console.error('Calendar fetch error:', e.message);
+    return null; // Fail open — fall back to manual status
+  }
+}
+
 // ── Attorney Status Pages ─────────────────────────────────────────────────────
 app.get('/status/:token', async (req, res) => {
   if (!dbPool) return res.status(503).send('Service unavailable');
@@ -355,6 +432,14 @@ app.post('/api/phone/inbound', async (req, res) => {
       );
 
       if (attorneys.length > 0) {
+        // Check each attorney's live calendar and override manual status if there's an active event
+        for (const atty of attorneys) {
+          if (atty.calendar_url) {
+            const cal = await fetchCalendarStatus(atty.calendar_url);
+            if (cal) atty.status = cal.status; // calendar beats the toggle
+          }
+        }
+
         const available = attorneys.filter(a => a.status === 'available' && a.phone);
         const allUnavailable = attorneys.every(a => a.status !== 'available');
 
@@ -472,7 +557,7 @@ app.post('/api/onboarding/save', async (req, res) => {
   const {
     plan, firmName, website, practiceAreas, attorneyCount,
     forwardNumber, timezone, businessOpen, businessClose, callMode,
-    attorneyName, attorneyEmail, attorneyPhone,
+    attorneyName, attorneyEmail, attorneyPhone, calendarUrl,
   } = req.body || {};
 
   const largeFirm = parseInt(attorneyCount) >= 5;
@@ -497,9 +582,9 @@ app.post('/api/onboarding/save', async (req, res) => {
       );
       // Create the attorney record so they get a live status toggle page
       await dbPool.query(
-        `INSERT INTO intakeai_attorneys (attorney_token, client_token, name, phone, email, rotation_order)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [attorneyToken, token, attorneyName || firmName, attorneyPhone || '', attorneyEmail || '', 0]
+        `INSERT INTO intakeai_attorneys (attorney_token, client_token, name, phone, email, rotation_order, calendar_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [attorneyToken, token, attorneyName || firmName, attorneyPhone || '', attorneyEmail || '', 0, calendarUrl || null]
       );
     } catch (e) {
       console.error('Onboarding save error:', e.message);
@@ -521,9 +606,10 @@ PRACTICE AREAS: ${Array.isArray(practiceAreas) ? practiceAreas.join(', ') : prac
 YOUR ATTORNEY STATUS PAGE (bookmark this on your phone):
 ${statusPageUrl}
 
-Tap this link any time to toggle your status — Available, With a Client, or Out of Office.
-When callers ring your IntakeAI number, the AI checks your status in real time and routes
-accordingly (forwarding to you when available, or taking a message when you're busy or out).
+Tap this link any time to toggle your status — Available, With a Client, In Court, or Out of Office.
+When callers ring your IntakeAI number, the AI checks your live calendar first (if connected),
+then your manual status, and routes accordingly.
+${calendarUrl ? `\nYour calendar is connected — status will update automatically based on your scheduled events.` : `\nTip: Connect your calendar so your status updates automatically when you have court or meetings.\nAny calendar works (Google, Outlook, Apple, Calendly, Clio, and more) — just paste your iCal feed URL\ninto your attorney profile.`}
 
 TWILIO PHONE WEBHOOK URL:
 ${webhookUrl}
@@ -827,9 +913,12 @@ async function initDb() {
         email           TEXT,
         status          TEXT DEFAULT 'available',
         rotation_order  INTEGER DEFAULT 0,
-        last_status_at  TIMESTAMPTZ DEFAULT NOW()
+        last_status_at  TIMESTAMPTZ DEFAULT NOW(),
+        calendar_url    TEXT
       )
     `);
+    // Add calendar_url to existing tables that were created before this column existed
+    await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS calendar_url TEXT`);
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS intakeai_firms (
         id           SERIAL PRIMARY KEY,

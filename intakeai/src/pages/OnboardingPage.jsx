@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Scale, ChevronRight, ChevronLeft, Copy, Check } from 'lucide-react';
+import { Scale, ChevronRight, ChevronLeft, Copy, Check, ChevronDown, ChevronUp, Calendar } from 'lucide-react';
 
 const PRACTICES = [
   'Personal Injury', 'Criminal Defense', 'DUI / DWI', 'Family Law',
@@ -116,6 +116,98 @@ function StepFirmInfo({ data, update, togglePractice }) {
   );
 }
 
+const CALENDAR_GUIDES = [
+  {
+    name: 'Google Calendar',
+    steps: [
+      'Open Google Calendar on desktop',
+      'On the left, hover your calendar name and click ⋮ (three dots) → Settings',
+      'Scroll to "Integrate calendar"',
+      'Copy the "Secret address in iCal format" link (ends in .ics)',
+    ],
+  },
+  {
+    name: 'Outlook / Microsoft 365',
+    steps: [
+      'Go to outlook.com or your Office 365 calendar',
+      'Click Settings (⚙️) → View all Outlook settings → Calendar → Shared calendars',
+      'Under "Publish a calendar", select your calendar and choose "Can view all details"',
+      'Click Publish, then copy the ICS link',
+    ],
+  },
+  {
+    name: 'Apple iCloud',
+    steps: [
+      'Open Calendar on Mac or go to icloud.com/calendar',
+      'Hover over your calendar name and click the share icon (📡)',
+      'Check "Public Calendar" and copy the link shown',
+      'Change webcal:// at the start to https://',
+    ],
+  },
+  {
+    name: 'Calendly',
+    steps: [
+      'Log in to Calendly → click your avatar → Profile',
+      'Scroll to "Calendar Sync" or "Integrations"',
+      'Copy your personal iCal feed URL (ends in .ics)',
+    ],
+  },
+  {
+    name: 'Yahoo Calendar',
+    steps: [
+      'Open Yahoo Calendar and click the ⚙️ gear icon',
+      'Choose "Export" or "Share Calendar"',
+      'Copy the ICS/iCal feed URL provided',
+    ],
+  },
+  {
+    name: 'Clio / MyCase / Practice Mgmt',
+    steps: [
+      'Go to Calendar settings inside your practice management app',
+      'Look for "Export", "Subscribe", or "iCal feed" option',
+      'Copy the iCal URL — it works with any .ics compatible feed',
+    ],
+  },
+];
+
+function CalendarGuide() {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(null);
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 text-xs text-violet-600 hover:text-violet-700 font-medium">
+        {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        How to find your calendar URL
+      </button>
+      {open && (
+        <div className="mt-3 border border-gray-200 rounded-xl overflow-hidden">
+          {CALENDAR_GUIDES.map((g, i) => (
+            <div key={g.name} className={i > 0 ? 'border-t border-gray-100' : ''}>
+              <button type="button"
+                onClick={() => setActive(active === i ? null : i)}
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 text-left">
+                {g.name}
+                {active === i ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+              </button>
+              {active === i && (
+                <ol className="px-4 pb-4 space-y-1">
+                  {g.steps.map((s, j) => (
+                    <li key={j} className="flex gap-2 text-xs text-gray-600">
+                      <span className="flex-shrink-0 w-4 h-4 rounded-full bg-violet-100 text-violet-700 flex items-center justify-center font-bold text-[10px]">{j + 1}</span>
+                      {s}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepAlerts({ data, update }) {
   return (
     <div className="space-y-6">
@@ -137,6 +229,20 @@ function StepAlerts({ data, update }) {
         <Input type="tel" value={data.attorneyPhone} onChange={v => update('attorneyPhone', v)}
           placeholder="+1 555 000 0000" />
       </Field>
+
+      <div>
+        <label className="block text-sm font-semibold text-gray-700 mb-1">
+          <span className="flex items-center gap-1.5"><Calendar size={14} /> Calendar URL</span>
+        </label>
+        <p className="text-xs text-gray-400 mb-2">
+          Optional but recommended — IntakeAI checks your live calendar on every call and
+          automatically sets your status (In Court, With a Client, etc.) so you never have to toggle manually.
+          Works with Google, Outlook, Apple, Calendly, Clio, and any iCal-compatible calendar.
+        </p>
+        <Input value={data.calendarUrl} onChange={v => update('calendarUrl', v)}
+          placeholder="https://calendar.google.com/calendar/ical/.../basic.ics" />
+        <CalendarGuide />
+      </div>
     </div>
   );
 }
@@ -249,12 +355,21 @@ function DoneScreen({ plan, data, webhookUrl, statusPageUrl }) {
               <h3 className="font-semibold text-gray-900 mb-1">Your Attorney Status Page</h3>
               <p className="text-sm text-gray-500 mb-3">
                 Bookmark this link on your phone. Tap it any time to set yourself as Available,
-                With a Client, or Out of Office — IntakeAI routes callers based on your live status.
+                With a Client, In Court, or Out of Office.
+                {data.calendarUrl
+                  ? ' Your calendar is connected — status will update automatically based on your schedule.'
+                  : ' Add your calendar URL later to have status update automatically from your schedule.'}
               </p>
               <CopyBox value={statusPageUrl} />
               <p className="text-xs text-gray-400 mt-2">
                 Open on your phone → tap "Add to Home Screen" for instant one-tap access.
               </p>
+              {data.calendarUrl && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  <Check size={13} className="flex-shrink-0" />
+                  Calendar connected — IntakeAI will check it live on every inbound call.
+                </div>
+              )}
             </div>
           )}
 
@@ -321,6 +436,7 @@ export default function OnboardingPage() {
     attorneyName: '',
     attorneyEmail: '',
     attorneyPhone: '',
+    calendarUrl: '',
     forwardNumber: '',
     timezone: 'America/Chicago',
     businessOpen: '09:00',
