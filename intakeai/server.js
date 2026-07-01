@@ -412,8 +412,15 @@ function gather(action, text, voice = VOICE_FEMALE) {
   );
 }
 
-const PHONE_INTRO_PROMPT =
-  "Thank you for calling. I'm the virtual intake assistant. Can I start with your name?";
+const phoneIntroPrompt = (firmName) =>
+  firmName
+    ? `Thank you for calling ${firmName}. I'm the virtual intake assistant for ${firmName}. Can I start with your name?`
+    : "Thank you for calling. I'm the virtual intake assistant. Can I start with your name?";
+
+function normalizePhone(phone) {
+  const digits = (phone || '').replace(/\D/g, '');
+  return digits.slice(-10);
+}
 
 const PHONE_ROUTING_PROMPT = (name) =>
   `Hi ${name || 'there'}! Are you hoping to speak with an attorney, schedule an in-person appointment, or would you like to leave a voicemail message?`;
@@ -750,14 +757,37 @@ app.post('/api/phone/inbound', async (req, res) => {
   const mode        = req.query.mode    || 'afterhours';
   const duringHours = mode !== 'always' && isBusinessHours(tz, open, close);
 
+  // VIP caller check — always connect directly regardless of attorney status
+  if (clientToken && dbPool && from) {
+    try {
+      const { rows: allAttorneys } = await dbPool.query(
+        `SELECT name, phone, vip_phones FROM intakeai_attorneys WHERE client_token=$1 AND phone IS NOT NULL AND phone != ''`,
+        [clientToken]
+      );
+      const callerLast10 = normalizePhone(from);
+      for (const atty of allAttorneys) {
+        const vips = JSON.parse(atty.vip_phones || '[]');
+        if (vips.some(v => normalizePhone(v.phone) === callerLast10)) {
+          console.log(`Phone: VIP caller ${from} → ${atty.name} (${atty.phone})`);
+          return res.type('text/xml').send(twiml(
+            `<Dial timeout="30">${atty.phone}</Dial>`
+          ));
+        }
+      }
+    } catch (e) {
+      console.error('VIP check error:', e.message);
+    }
+  }
+
   // Multi-attorney routing — check live availability status
   if (clientToken && dbPool) {
     try {
       const [{ rows: attorneys }, { rows: clientRows }] = await Promise.all([
         dbPool.query(`SELECT * FROM intakeai_attorneys WHERE client_token=$1 ORDER BY rotation_order ASC, id ASC`, [clientToken]),
-        dbPool.query(`SELECT voice FROM intakeai_clients WHERE client_token=$1`, [clientToken]),
+        dbPool.query(`SELECT voice, firm_name FROM intakeai_clients WHERE client_token=$1`, [clientToken]),
       ]);
       const firmVoice = clientRows[0]?.voice || VOICE_FEMALE;
+      const firmName  = clientRows[0]?.firm_name || '';
 
       if (attorneys.length > 0) {
         // Check each attorney's live calendar and override manual status if there's an active event
@@ -799,16 +829,16 @@ app.post('/api/phone/inbound', async (req, res) => {
             : allOut
               ? 'Our office is currently closed.'
               : 'All of our attorneys are currently with clients.';
-          phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close, voice: firmVoice });
+          phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, firmName, attorneys, firmTz: tz, firmOpen: open, firmClose: close, voice: firmVoice });
           return res.type('text/xml').send(twiml(
             say(situation, firmVoice) +
-            gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT, firmVoice)
+            gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, phoneIntroPrompt(firmName), firmVoice)
           ));
         }
 
         // After hours or always-on mode
-        phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close, voice: firmVoice });
-        return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
+        phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, firmName, attorneys, firmTz: tz, firmOpen: open, firmClose: close, voice: firmVoice });
+        return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, phoneIntroPrompt(firmName), firmVoice)));
       }
     } catch (e) {
       console.error('Multi-attorney routing error:', e.message);
@@ -826,7 +856,7 @@ app.post('/api/phone/inbound', async (req, res) => {
 
   console.log(`Phone: AI intake (mode=${mode}) from ${from}`);
   phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone' });
-  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
+  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, phoneIntroPrompt(''))));
 });
 
 // If an attorney doesn't answer, try the next available one, then fall back to AI intake
@@ -868,7 +898,7 @@ app.post('/api/phone/dial-fallback', (req, res) => {
       apptDay: '', apptTime: '', apptMatter: '', email: '',
       source: 'phone-fallback',
     });
-    return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTRO_PROMPT, v)));
+    return res.type('text/xml').send(twiml(gather(gatherUrl, phoneIntroPrompt(session.firmName || ''), v)));
   }
 
   // Legacy / no session (single-attorney or session expired)
@@ -879,7 +909,7 @@ app.post('/api/phone/dial-fallback', (req, res) => {
     apptDay: '', apptTime: '', apptMatter: '', email: '',
     source: 'phone-fallback',
   });
-  res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTRO_PROMPT)));
+  res.type('text/xml').send(twiml(gather(gatherUrl, phoneIntroPrompt(''))));
 });
 
 // POST /api/phone/recording-complete — Twilio calls this after <Record> finishes
@@ -1816,6 +1846,65 @@ app.get('/api/attorney/voicemails/:id/audio', requireAttorneyAuth, async (req, r
   }
 });
 
+// ── VIP Contacts ─────────────────────────────────────────────────────────────
+// VIP numbers always ring through directly, bypassing attorney status and intake flow.
+
+app.get('/api/attorney/vip-contacts', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT vip_phones FROM intakeai_attorneys WHERE attorney_token=$1`,
+      [req.attorney.attorney_token]
+    );
+    res.json({ vips: JSON.parse(rows[0]?.vip_phones || '[]') });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/attorney/vip-contacts', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  const { label, phone } = req.body || {};
+  if (!phone) return res.status(400).json({ error: 'Phone number is required' });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT vip_phones FROM intakeai_attorneys WHERE attorney_token=$1`,
+      [req.attorney.attorney_token]
+    );
+    const vips = JSON.parse(rows[0]?.vip_phones || '[]');
+    vips.push({ label: (label || 'VIP').trim(), phone: phone.trim() });
+    await dbPool.query(
+      `UPDATE intakeai_attorneys SET vip_phones=$1 WHERE attorney_token=$2`,
+      [JSON.stringify(vips), req.attorney.attorney_token]
+    );
+    await auditLog(req.attorney.attorney_token, 'vip_added', null, req.ip, label);
+    res.json({ vips });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/attorney/vip-contacts/:index', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  const idx = parseInt(req.params.index);
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT vip_phones FROM intakeai_attorneys WHERE attorney_token=$1`,
+      [req.attorney.attorney_token]
+    );
+    const vips = JSON.parse(rows[0]?.vip_phones || '[]');
+    if (isNaN(idx) || idx < 0 || idx >= vips.length) return res.status(400).json({ error: 'Invalid index' });
+    vips.splice(idx, 1);
+    await dbPool.query(
+      `UPDATE intakeai_attorneys SET vip_phones=$1 WHERE attorney_token=$2`,
+      [JSON.stringify(vips), req.attorney.attorney_token]
+    );
+    res.json({ vips });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Stripe Checkout ───────────────────────────────────────────────────────────
 const STRIPE_SECRET          = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_PRICE_SELFSERVE = process.env.STRIPE_PRICE_SELFSERVE || '';
@@ -1823,7 +1912,7 @@ const STRIPE_PRICE_MANAGED   = process.env.STRIPE_PRICE_MANAGED || '';
 const STRIPE_PRICE_SETUP     = process.env.STRIPE_PRICE_MANAGED_SETUP || '';
 const STRIPE_PRICE_FIRM      = process.env.STRIPE_PRICE_FIRM || '';
 const STRIPE_PRICE_FIRM_SETUP = process.env.STRIPE_PRICE_FIRM_SETUP || '';
-const APP_URL = process.env.APP_URL || 'https://leadforge-production-3ee8.up.railway.app';
+const APP_URL = process.env.APP_URL || 'https://www.myintakeai.com';
 
 app.post('/api/stripe/checkout', async (req, res) => {
   const { plan } = req.body || {};
@@ -2096,6 +2185,7 @@ async function initDb() {
     `);
     await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS calendar_url TEXT`);
     await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'associate'`);
+    await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS vip_phones TEXT DEFAULT '[]'`);
     await dbPool.query(`ALTER TABLE intakeai_clients   ADD COLUMN IF NOT EXISTS voice TEXT DEFAULT 'Polly.Joanna'`);
     await dbPool.query(`ALTER TABLE intakeai_clients   ADD COLUMN IF NOT EXISTS escalation_minutes INTEGER DEFAULT 5`);
     await dbPool.query(`ALTER TABLE intakeai_leads     ADD COLUMN IF NOT EXISTS appt_slot TIMESTAMPTZ`);
@@ -2367,7 +2457,7 @@ Would you have 10 minutes this week to see how it would work for ${firm.firm_nam
 Best,
 Shanon Williams
 IntakeAI
-https://leadforge-production-3ee8.up.railway.app
+https://www.myintakeai.com
 
 ---
 You're receiving this because your firm appeared in a public directory.

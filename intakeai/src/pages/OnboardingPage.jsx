@@ -458,7 +458,7 @@ function DoneScreen({ plan, data, webhookUrl, statusPageUrl }) {
           <div className="bg-white border border-gray-200 rounded-xl p-6">
             <h3 className="font-semibold text-gray-900 mb-1">Confirmation sent</h3>
             <p className="text-sm text-gray-500">
-              We've emailed your full setup details to <strong>{data.attorneyEmail}</strong>.
+              We've emailed your full setup details to <strong>{data.attorneys[0]?.email}</strong>.
               Check that inbox — it includes everything you need.
             </p>
           </div>
@@ -509,7 +509,7 @@ function DoneScreen({ plan, data, webhookUrl, statusPageUrl }) {
             <h3 className="font-semibold text-gray-900 mb-3">Next steps</h3>
             {isManaged ? (
               <div className="space-y-2 text-sm text-gray-600">
-                <p>✓ Our team will reach out to <strong>{data.attorneyEmail}</strong> within 1 business day.</p>
+                <p>✓ Our team will reach out to <strong>{data.attorneys[0]?.email}</strong> within 1 business day.</p>
                 <p>✓ We'll install the chat widget on your website for you.</p>
                 <p>✓ We'll configure your Twilio number and test everything end-to-end.</p>
               </div>

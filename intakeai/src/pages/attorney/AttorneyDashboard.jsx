@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Scale, LogOut, Phone, Mail, Globe, Clock, User,
-  AlertCircle, ChevronDown, RefreshCw, Shield, Trash2, Mic
+  AlertCircle, ChevronDown, RefreshCw, Shield, Trash2, Mic, Star, Plus
 } from 'lucide-react';
 
 const URGENCY_COLOR = {
@@ -48,6 +48,11 @@ export default function AttorneyDashboard() {
   const [showDevices, setShowDevices]   = useState(false);
   const [expanded, setExpanded]         = useState(null);
   const [lastRefresh, setLastRefresh]   = useState(Date.now());
+  const [vips, setVips]                 = useState([]);
+  const [vipLabel, setVipLabel]         = useState('');
+  const [vipPhone, setVipPhone]         = useState('');
+  const [vipSaving, setVipSaving]       = useState(false);
+  const [vipError, setVipError]         = useState('');
 
   const fetchMe = useCallback(async () => {
     try {
@@ -87,11 +92,48 @@ export default function AttorneyDashboard() {
     if (res.ok) setDevices((await res.json()).devices || []);
   }, []);
 
+  const fetchVips = useCallback(async () => {
+    const res = await fetch('/api/attorney/vip-contacts', { credentials: 'include' });
+    if (res.ok) setVips((await res.json()).vips || []);
+  }, []);
+
+  const addVip = async (e) => {
+    e.preventDefault();
+    setVipError('');
+    if (!vipPhone.trim()) { setVipError('Phone number is required.'); return; }
+    setVipSaving(true);
+    try {
+      const res = await fetch('/api/attorney/vip-contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ label: vipLabel || 'VIP', phone: vipPhone }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setVipError(data.error || 'Could not save.'); return; }
+      setVips(data.vips);
+      setVipLabel('');
+      setVipPhone('');
+    } catch {
+      setVipError('Network error — please try again.');
+    } finally {
+      setVipSaving(false);
+    }
+  };
+
+  const removeVip = async (idx) => {
+    const res = await fetch(`/api/attorney/vip-contacts/${idx}`, {
+      method: 'DELETE', credentials: 'include',
+    });
+    if (res.ok) setVips((await res.json()).vips || []);
+  };
+
   useEffect(() => {
     fetchMe();
     fetchLeads();
     fetchVoicemails();
-  }, [fetchMe, fetchLeads, fetchVoicemails]);
+    fetchVips();
+  }, [fetchMe, fetchLeads, fetchVoicemails, fetchVips]);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
@@ -228,6 +270,7 @@ export default function AttorneyDashboard() {
               { id: 'new',       label: `New (${leads.length})` },
               { id: 'mine',      label: `My Leads (${myLeads.length})` },
               { id: 'voicemail', label: 'Voicemail', badge: unheardCount },
+              { id: 'vip',       label: 'VIP' },
             ].map(t => (
               <button key={t.id} onClick={() => setTab(t.id)}
                 className={`relative px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
@@ -323,8 +366,103 @@ export default function AttorneyDashboard() {
           )
         )}
 
+        {/* VIP contacts tab */}
+        {tab === 'vip' && (
+          <div className="space-y-4">
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <Star size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">Always-connect numbers</p>
+                  <p className="text-sm text-amber-700 mt-0.5">
+                    When someone on this list calls your IntakeAI number, the call rings through to you
+                    immediately — no AI intake, no status check. If you are marked as unavailable or in court,
+                    the call still comes through.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Add VIP form */}
+            <form onSubmit={addVip} className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-semibold text-gray-800">Add a VIP number</p>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Label</label>
+                  <input
+                    type="text"
+                    value={vipLabel}
+                    onChange={e => setVipLabel(e.target.value)}
+                    placeholder="e.g. Wife, Mom, Doctor"
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Phone number</label>
+                  <input
+                    type="tel"
+                    value={vipPhone}
+                    onChange={e => setVipPhone(e.target.value)}
+                    placeholder="+1 555 000 0000"
+                    required
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                  />
+                </div>
+              </div>
+              {vipError && (
+                <p className="text-xs text-red-600 flex items-center gap-1">
+                  <AlertCircle size={12} /> {vipError}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={vipSaving}
+                className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
+              >
+                <Plus size={14} />
+                {vipSaving ? 'Saving…' : 'Add VIP number'}
+              </button>
+            </form>
+
+            {/* VIP list */}
+            {vips.length === 0 ? (
+              <div className="text-center py-10">
+                <Star size={28} className="mx-auto text-gray-300 mb-2" />
+                <p className="text-gray-400 text-sm">No VIP numbers yet. Add one above.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {vips.map((v, i) => (
+                  <div key={i} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                        <Star size={14} className="text-amber-500" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">{v.label}</p>
+                        <p className="text-xs text-gray-500">{v.phone}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <a href={`tel:${v.phone}`}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 hover:bg-green-100 border border-green-200 text-green-700 text-xs font-medium rounded-lg transition-colors">
+                        <Phone size={12} />
+                        Call
+                      </a>
+                      <button onClick={() => removeVip(i)}
+                        className="p-1.5 text-gray-300 hover:text-red-500 transition-colors">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Lead list */}
-        {tab !== 'voicemail' && (loading ? (
+        {tab !== 'voicemail' && tab !== 'vip' && (loading ? (
           <div className="text-center py-16 text-gray-400 text-sm">Loading leads…</div>
         ) : displayLeads.length === 0 ? (
           <div className="text-center py-16">
