@@ -88,23 +88,25 @@ function buildEmailTemplate(prospect) {
     : `Hi there`;
   const firm = prospect.firmName ? ` at ${prospect.firmName}` : '';
   return {
-    subject: `Automate your client intake${firm} — IntakeAI`,
+    subject: `${prospect.firmName || 'Your firm'} is losing clients after hours — here's the fix`,
     body: `${name},
 
-I wanted to reach out because I think IntakeAI could be a great fit for your practice.
+Here's a number that might surprise you: studies show that 42% of calls to law firms go unanswered — and 85% of those callers never call back. They move on to the next firm.
 
-IntakeAI is a 24/7 AI-powered intake system designed specifically for law firms. Here's what it does for you:
+That means nearly half of your potential clients are slipping away while you're in court, with another client, or simply after hours.
 
-• Captures potential clients on your website around the clock — nights, weekends, holidays
-• Qualifies each lead automatically and scores urgency (arrests, accidents, deadlines)
-• Texts and emails you the full case summary the moment a hot lead completes intake
-• Works for any practice area — personal injury, criminal defense, family law, and more
+IntakeAI fixes this. It's a 24/7 AI-powered intake system built specifically for law firms:
 
-Most firms go live within one business day, and our clients typically see their intake volume double within the first 30 days.
+• Answers every inquiry the moment it comes in — nights, weekends, holidays
+• Qualifies each potential client and scores urgency automatically (arrests, accidents, court deadlines)
+• Sends you a full case summary by text and email the instant a hot lead finishes intake
+• Works for any practice area — personal injury, criminal defense, family law, immigration, and more
 
-We offer a 14-day free trial with no credit card required.
+The average firm that adds IntakeAI stops losing after-hours leads within the first week.
 
-Would you be open to a quick call to see if it's a fit for ${prospect.firmName || 'your firm'}?
+We offer a 14-day free trial with no setup fee required, and most firms are live within one business day.
+
+Would you have 10 minutes this week to see how it would work for ${prospect.firmName || 'your firm'}?
 
 Best,
 Shanon Williams
