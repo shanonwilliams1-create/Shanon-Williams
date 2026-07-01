@@ -395,15 +395,18 @@ function getHolidayGreeting() {
 function twiml(inner) {
   return `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
 }
-function say(text) {
-  return `<Say voice="Polly.Joanna">${text}</Say>`;
+const VOICE_FEMALE = 'Polly.Joanna';
+const VOICE_MALE   = 'Polly.Matthew';
+
+function say(text, voice = VOICE_FEMALE) {
+  return `<Say voice="${voice}">${text}</Say>`;
 }
-function gather(action, text) {
+function gather(action, text, voice = VOICE_FEMALE) {
   return (
     `<Gather input="speech" action="${action}" method="POST" speechTimeout="3" language="en-US">` +
-    say(text) +
+    say(text, voice) +
     `</Gather>` +
-    say("Sorry, I didn't catch that.") +
+    say("Sorry, I didn't catch that.", voice) +
     `<Redirect method="POST">${action}</Redirect>`
   );
 }
@@ -749,10 +752,11 @@ app.post('/api/phone/inbound', async (req, res) => {
   // Multi-attorney routing — check live availability status
   if (clientToken && dbPool) {
     try {
-      const { rows: attorneys } = await dbPool.query(
-        `SELECT * FROM intakeai_attorneys WHERE client_token=$1 ORDER BY rotation_order ASC, id ASC`,
-        [clientToken]
-      );
+      const [{ rows: attorneys }, { rows: clientRows }] = await Promise.all([
+        dbPool.query(`SELECT * FROM intakeai_attorneys WHERE client_token=$1 ORDER BY rotation_order ASC, id ASC`, [clientToken]),
+        dbPool.query(`SELECT voice FROM intakeai_clients WHERE client_token=$1`, [clientToken]),
+      ]);
+      const firmVoice = clientRows[0]?.voice || VOICE_FEMALE;
 
       if (attorneys.length > 0) {
         // Check each attorney's live calendar and override manual status if there's an active event
@@ -790,15 +794,15 @@ app.post('/api/phone/inbound', async (req, res) => {
             : allOut
               ? 'Our office is currently closed.'
               : 'All of our attorneys are currently with clients.';
-          phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close });
+          phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close, voice: firmVoice });
           return res.type('text/xml').send(twiml(
-            say(situation) +
-            gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)
+            say(situation, firmVoice) +
+            gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT, firmVoice)
           ));
         }
 
         // After hours or always-on mode
-        phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close });
+        phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone', clientToken, attorneys, firmTz: tz, firmOpen: open, firmClose: close, voice: firmVoice });
         return res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
       }
     } catch (e) {
@@ -845,6 +849,7 @@ app.post('/api/phone/gather', async (req, res) => {
     );
   }
 
+  const v = session.voice || VOICE_FEMALE; // firm's chosen voice
   const gatherUrl = `/api/phone/gather?sid=${encodeURIComponent(callSid)}`;
 
   // ── Intro: collect caller's name ──────────────────────────────────────────
@@ -852,7 +857,7 @@ app.post('/api/phone/gather', async (req, res) => {
     session.name  = speech.split(' ')[0] || speech;
     session.phase = 'routing';
     return res.type('text/xml').send(twiml(
-      gather(gatherUrl, PHONE_ROUTING_PROMPT(session.name))
+      gather(gatherUrl, PHONE_ROUTING_PROMPT(session.name), v)
     ));
   }
 
@@ -876,14 +881,14 @@ app.post('/api/phone/gather', async (req, res) => {
       if (slots.length > 0) {
         const opts = slots.map((s, i) => `Option ${i + 1}: ${s.label}`).join('. ');
         const slotPrompt = `Great! I checked our schedule and have ${slots.length} open times for you: ${opts}. Which works best — just say option 1, 2, ${slots.length > 2 ? '3,' : ''} or another choice?`;
-        return res.type('text/xml').send(twiml(gather(gatherUrl, slotPrompt)));
+        return res.type('text/xml').send(twiml(gather(gatherUrl, slotPrompt, v)));
       }
       // No calendar or fully booked — fall back to free-form
-      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_APPT_STEPS[0].prompt)));
+      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_APPT_STEPS[0].prompt, v)));
     } else {
       session.phase = 'intake';
       session.step  = 0;
-      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTAKE_STEPS[0].prompt)));
+      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTAKE_STEPS[0].prompt, v)));
     }
   }
 
@@ -926,10 +931,10 @@ app.post('/api/phone/gather', async (req, res) => {
       const closing = urgent
         ? `Thank you, ${session.name}. Your case has been flagged as urgent. An attorney will contact you as soon as possible.${holidaySuffix} Goodbye.`
         : `Thank you, ${session.name}. Your information has been submitted and an attorney will follow up within one business day.${holidaySuffix} Goodbye.`;
-      return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
+      return res.type('text/xml').send(twiml(say(closing, v) + '<Hangup/>'));
     }
 
-    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt)));
+    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt, v)));
   }
 
   // ── Appointment: schedule in-person visit ─────────────────────────────────
@@ -949,14 +954,16 @@ app.post('/api/phone/gather', async (req, res) => {
         session.apptDay  = chosen.label;
         session.step = 1;
         return res.type('text/xml').send(twiml(gather(gatherUrl,
-          `Perfect! I have you down for ${chosen.label}. In a few words, what will this appointment be about — for example, a car accident, injury case, or divorce?`
+          `Perfect! I have you down for ${chosen.label}. In a few words, what will this appointment be about — for example, a car accident, injury case, or divorce?`,
+          v
         )));
       }
       if (session.step === 1) {
         session.apptMatter = speech;
         session.step = 2;
         return res.type('text/xml').send(twiml(gather(gatherUrl,
-          "Almost done. What email address should we send your calendar invitation to?"
+          "Almost done. What email address should we send your calendar invitation to?",
+          v
         )));
       }
       if (session.step === 2) {
@@ -969,7 +976,7 @@ app.post('/api/phone/gather', async (req, res) => {
       session[steps[session.step].field] = speech;
       session.step += 1;
       if (session.step < steps.length) {
-        return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt)));
+        return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt, v)));
       }
       done = true;
     }
@@ -990,12 +997,12 @@ app.post('/api/phone/gather', async (req, res) => {
         ? `Your appointment is confirmed for ${session.apptDay}. A calendar invitation will be sent to ${session.email}.`
         : `Your appointment request for ${session.apptDay || 'the time you requested'} has been submitted. The office will confirm with you at ${session.email} shortly.`;
       return res.type('text/xml').send(twiml(
-        say(`Thank you, ${session.name}. ${slotConfirm} We look forward to meeting you.${holidaySuffix} Goodbye.`) + '<Hangup/>'
+        say(`Thank you, ${session.name}. ${slotConfirm} We look forward to meeting you.${holidaySuffix} Goodbye.`, v) + '<Hangup/>'
       ));
     }
   }
 
-  return res.type('text/xml').send(twiml(say("I'm sorry, something went wrong. Please call back.") + '<Hangup/>'));
+  return res.type('text/xml').send(twiml(say("I'm sorry, something went wrong. Please call back.", v) + '<Hangup/>'));
 });
 
 // ── Save Lead & Alert Attorneys ───────────────────────────────────────────────
@@ -1153,7 +1160,7 @@ const SILENT_ROLES  = new Set(['managing_partner']);
 app.post('/api/onboarding/save', async (req, res) => {
   const {
     plan, firmName, website, practiceAreas, attorneyCount,
-    forwardNumber, timezone, businessOpen, businessClose, callMode,
+    forwardNumber, timezone, businessOpen, businessClose, callMode, voice,
     // Legacy single-attorney fields (kept for backward compat)
     attorneyName, attorneyEmail, attorneyPhone, calendarUrl,
     // New multi-attorney array
@@ -1176,11 +1183,12 @@ app.post('/api/onboarding/save', async (req, res) => {
       await dbPool.query(
         `INSERT INTO intakeai_clients
          (client_token, plan, firm_name, website, practice_areas,
-          forward_number, timezone, business_open, business_close, call_mode,
+          forward_number, timezone, business_open, business_close, call_mode, voice,
           attorney_name, attorney_email, attorney_phone)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
         [token, plan, firmName, website, Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas,
          forwardNumber, timezone, businessOpen, businessClose, callMode,
+         voice || VOICE_FEMALE,
          primaryAtty.name, primaryAtty.email, primaryAtty.phone]
       );
 
@@ -1869,6 +1877,7 @@ async function initDb() {
         business_open   TEXT DEFAULT '09:00',
         business_close  TEXT DEFAULT '17:00',
         call_mode       TEXT DEFAULT 'afterhours',
+        voice           TEXT DEFAULT 'Polly.Joanna',
         attorney_name   TEXT,
         attorney_email  TEXT,
         attorney_phone  TEXT,
@@ -1892,6 +1901,7 @@ async function initDb() {
     `);
     await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS calendar_url TEXT`);
     await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'associate'`);
+    await dbPool.query(`ALTER TABLE intakeai_clients   ADD COLUMN IF NOT EXISTS voice TEXT DEFAULT 'Polly.Joanna'`);
     await dbPool.query(`ALTER TABLE intakeai_clients   ADD COLUMN IF NOT EXISTS escalation_minutes INTEGER DEFAULT 5`);
     await dbPool.query(`ALTER TABLE intakeai_leads     ADD COLUMN IF NOT EXISTS appt_slot TIMESTAMPTZ`);
 

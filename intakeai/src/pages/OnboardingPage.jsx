@@ -377,6 +377,32 @@ function StepPhone({ data, update }) {
         </select>
       </Field>
 
+      <Field label="AI Receptionist Voice" hint="Choose the voice callers hear during intake">
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { value: 'Polly.Joanna', label: 'Female', desc: 'Professional American woman', icon: '👩' },
+            { value: 'Polly.Matthew', label: 'Male', desc: 'Professional American man', icon: '👨' },
+          ].map(opt => (
+            <label key={opt.value}
+              className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors
+                ${data.voice === opt.value
+                  ? 'border-violet-500 bg-violet-50'
+                  : 'border-gray-200 hover:border-gray-300'}`}>
+              <input type="radio" name="voice" value={opt.value}
+                checked={data.voice === opt.value}
+                onChange={() => update('voice', opt.value)}
+                className="sr-only" />
+              <span className="text-2xl">{opt.icon}</span>
+              <div>
+                <p className={`text-sm font-bold ${data.voice === opt.value ? 'text-violet-700' : 'text-gray-800'}`}>{opt.label}</p>
+                <p className="text-xs text-gray-500">{opt.desc}</p>
+              </div>
+              {data.voice === opt.value && <Check size={14} className="text-violet-600 ml-auto flex-shrink-0" />}
+            </label>
+          ))}
+        </div>
+      </Field>
+
       <Field label="Call Answering Mode">
         <div className="space-y-2">
           {[
@@ -522,6 +548,7 @@ export default function OnboardingPage() {
     attorneyCount: '',
     practiceAreas: [],
     attorneys: [{ name: '', email: '', phone: '', role: 'associate', calendarUrl: '' }],
+    voice: 'Polly.Joanna',
     forwardNumber: '',
     timezone: 'America/Chicago',
     businessOpen: '09:00',
