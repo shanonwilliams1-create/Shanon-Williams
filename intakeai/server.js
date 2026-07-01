@@ -312,14 +312,37 @@ function parseIntakeInput(step, input, session) {
   else if (step === 5) session.email = txt;
 }
 
-app.post('/api/intake/chat/start', (req, res) => {
+// ── Widget CORS ───────────────────────────────────────────────────────────────
+function widgetCors(req, res, next) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+}
+app.options('/api/intake/chat/start',   widgetCors);
+app.options('/api/intake/chat/message', widgetCors);
+
+// ── Serve embeddable widget ───────────────────────────────────────────────────
+app.get('/widget.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.sendFile(join(__dirname, 'widget.js'));
+});
+
+app.post('/api/intake/chat/start', widgetCors, (req, res) => {
   const id = uid();
-  const session = { step: 0, source: req.body?.source || 'chat' };
+  const session = {
+    step: 0,
+    source: req.body?.source || 'chat',
+    clientToken: (req.body?.client_token || '').trim() || null,
+  };
   intakeSessions.set(id, session);
   res.json({ session_id: id, message: INTAKE_STEPS[0](session), done: false });
 });
 
-app.post('/api/intake/chat/message', async (req, res) => {
+app.post('/api/intake/chat/message', widgetCors, async (req, res) => {
   const { session_id, message } = req.body || {};
   const session = intakeSessions.get(session_id);
   if (!session) return res.status(404).json({ error: 'Session not found' });
@@ -333,8 +356,8 @@ app.post('/api/intake/chat/message', async (req, res) => {
 
   if (done) {
     session.done = true;
-    const score   = scoreIntake(session);
-    const urgent  = score >= 8;
+    const score  = scoreIntake(session);
+    const urgent = score >= 8;
     const summary =
       `New IntakeAI Lead (score: ${score}/10${urgent ? ' — URGENT' : ''})\n` +
       `Name:        ${session.name}\n` +
@@ -346,7 +369,21 @@ app.post('/api/intake/chat/message', async (req, res) => {
       `Source:      ${session.source}\n` +
       `Time:        ${new Date().toLocaleString()}`;
     console.log('\n── INTAKE LEAD ─────────────────\n' + summary + '\n────────────────────────────────');
-    if (NOTIFY_EMAIL) {
+
+    if (session.clientToken && dbPool) {
+      // Widget lead — save to DB and alert attorneys
+      saveLead({
+        client_token: session.clientToken,
+        name: session.name,
+        phone: session.phone,
+        email: session.email,
+        case_type: session.caseType,
+        description: session.description,
+        urgency: session.urgency,
+        score,
+        source: 'widget',
+      }).catch(e => console.error('Widget saveLead error:', e.message));
+    } else if (NOTIFY_EMAIL) {
       const subj = urgent
         ? `🚨 URGENT IntakeAI Lead — ${session.caseType} (score ${score}/10)`
         : `New IntakeAI Lead — ${session.caseType} (score ${score}/10)`;
