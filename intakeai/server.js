@@ -774,15 +774,19 @@ app.post('/api/phone/inbound', async (req, res) => {
         const allUnavailable = inRotation.length === 0 || inRotation.every(a => a.status !== 'available');
 
         if (duringHours && available.length > 0) {
-          // Route to next available attorney
+          // Route to first available attorney; store full list for sequential retry
           const atty = available[0];
           await dbPool.query(
             `UPDATE intakeai_attorneys SET rotation_order = rotation_order + 100 WHERE id=$1`, [atty.id]
           );
-          console.log(`Phone: routing ${from} → ${atty.name} (${atty.phone})`);
+          phoneSessions.set(callSid, {
+            phase: 'dialing', attemptIdx: 0, attorneys: available,
+            phone: from, clientToken, firmTz: tz, firmOpen: open, firmClose: close, voice: firmVoice,
+          });
+          console.log(`Phone: routing ${from} → ${atty.name} (${atty.phone}) [${available.length} available]`);
           return res.type('text/xml').send(twiml(
-            say('Please hold while we connect you.') +
-            `<Dial timeout="20" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}&token=${encodeURIComponent(clientToken)}" method="POST">${atty.phone}</Dial>`
+            say('Please hold while we connect you.', firmVoice) +
+            `<Dial timeout="10" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}" method="POST">${atty.phone}</Dial>`
           ));
         }
 
@@ -816,7 +820,7 @@ app.post('/api/phone/inbound', async (req, res) => {
     console.log(`Phone: business hours, forwarding ${from} → ${forwardTo}`);
     return res.type('text/xml').send(twiml(
       say('Please hold while we connect your call.') +
-      `<Dial timeout="20" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}" method="POST">${forwardTo}</Dial>`
+      `<Dial timeout="10" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}" method="POST">${forwardTo}</Dial>`
     ));
   }
 
@@ -825,18 +829,57 @@ app.post('/api/phone/inbound', async (req, res) => {
   res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
 });
 
-// If the office doesn't answer during business hours, fall back to AI intake
+// If an attorney doesn't answer, try the next available one, then fall back to AI intake
 app.post('/api/phone/dial-fallback', (req, res) => {
   const callSid    = req.query.sid;
   const dialStatus = req.body?.DialCallStatus || '';
   const from       = req.body?.From || '';
+  const gatherUrl  = `/api/phone/gather?sid=${encodeURIComponent(callSid)}`;
+
   if (dialStatus === 'completed') {
+    phoneSessions.delete(callSid);
     return res.type('text/xml').send(twiml('<Hangup/>'));
   }
-  // No answer / busy / failed — run AI intake
+
+  const session = phoneSessions.get(callSid);
+
+  // Sequential retry — try next attorney in the available list before going to AI
+  if (session?.phase === 'dialing') {
+    const nextIdx  = session.attemptIdx + 1;
+    const nextAtty = session.attorneys?.[nextIdx];
+
+    if (nextAtty?.phone) {
+      session.attemptIdx = nextIdx;
+      const prevName = session.attorneys[nextIdx - 1]?.name || 'the first line';
+      console.log(`Phone: ${prevName} no answer (${dialStatus}), trying ${nextAtty.name}`);
+      return res.type('text/xml').send(twiml(
+        say('One moment, let me try another line.', session.voice || VOICE_FEMALE) +
+        `<Dial timeout="10" action="/api/phone/dial-fallback?sid=${encodeURIComponent(callSid)}" method="POST">${nextAtty.phone}</Dial>`
+      ));
+    }
+
+    // All attorneys exhausted — switch to AI intake
+    const tried = session.attorneys?.length || 1;
+    console.log(`Phone: all ${tried} attorney(s) unavailable (${dialStatus}), starting AI intake for ${from}`);
+    const v = session.voice || VOICE_FEMALE;
+    Object.assign(session, {
+      phase: 'intro', step: 0, name: '', intent: '',
+      caseType: '', description: '', urgency: '',
+      apptDay: '', apptTime: '', apptMatter: '', email: '',
+      source: 'phone-fallback',
+    });
+    return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTRO_PROMPT, v)));
+  }
+
+  // Legacy / no session (single-attorney or session expired)
   console.log(`Phone: no answer (${dialStatus}), starting AI intake for ${from}`);
-  phoneSessions.set(callSid, { phase: 'intro', step: 0, phone: from, name: '', intent: '', caseType: '', description: '', urgency: '', apptDay: '', apptTime: '', apptMatter: '', email: '', source: 'phone-fallback' });
-  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
+  phoneSessions.set(callSid, {
+    phase: 'intro', step: 0, phone: from, name: '', intent: '',
+    caseType: '', description: '', urgency: '',
+    apptDay: '', apptTime: '', apptMatter: '', email: '',
+    source: 'phone-fallback',
+  });
+  res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTRO_PROMPT)));
 });
 
 // POST /api/phone/recording-complete — Twilio calls this after <Record> finishes
