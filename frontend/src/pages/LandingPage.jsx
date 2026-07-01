@@ -4,7 +4,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Zap, Users, Search, BarChart, ArrowRight, Star } from 'lucide-react';
-import IntakeChatWidget from '../components/IntakeChatWidget';
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -68,8 +67,7 @@ export default function LandingPage() {
         <p className="text-gray-400 text-sm">Start from $29/month — No per-lead fees. <button onClick={() => navigate('/auth/signup')} className="text-indigo-400 hover:underline">Start your free trial →</button></p>
       </section>
 
-      {/* Intake chat widget — fixed-position, floats over the page */}
-      <IntakeChatWidget />
+
     </div>
   );
 }
