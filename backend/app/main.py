@@ -2,6 +2,8 @@
 LeadForge — FastAPI Application Entry Point
 """
 import os
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +14,8 @@ from app.config import settings
 from app.database import engine, BaseModel
 from app.routers import auth, users, leads, outreach, appointments, followups, reviews, referrals
 from app.routers import intake
+
+logger = logging.getLogger("leadforge")
 
 APP_NAME = "LeadForge API"
 APP_VERSION = "0.1.0"
@@ -26,8 +30,29 @@ async def lifespan(app: FastAPI):
     # Startup: create tables
     async with engine.begin() as conn:
         await conn.run_sync(BaseModel.metadata.create_all)
+
+    # Start background scraper worker
+    scraper_task = None
+    try:
+        from app.scraper_worker import scraper_loop
+        shutdown_event = asyncio.Event()
+        scraper_task = asyncio.create_task(scraper_loop(shutdown_event))
+        logger.info("Background scraper worker started")
+    except Exception as e:
+        logger.warning(f"Could not start scraper worker: {e}")
+
     yield
-    # Shutdown
+
+    # Shutdown: cancel scraper worker
+    if scraper_task:
+        shutdown_event.set()
+        scraper_task.cancel()
+        try:
+            await asyncio.wait_for(scraper_task, timeout=10.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+        logger.info("Background scraper worker stopped")
+
     await engine.dispose()
 
 
