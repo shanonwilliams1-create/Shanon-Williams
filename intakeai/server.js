@@ -259,7 +259,11 @@ app.post('/api/phone/inbound', (req, res) => {
   const open      = req.query.open    || '09:00';
   const close     = req.query.close   || '17:00';
 
-  if (forwardTo && isBusinessHours(tz, open, close)) {
+  // mode=always  → AI answers every call 24/7 (replaces receptionist)
+  // mode=afterhours (default) → AI only after hours, forwards during business hours
+  const mode = req.query.mode || 'afterhours';
+
+  if (mode !== 'always' && forwardTo && isBusinessHours(tz, open, close)) {
     // Business hours — ring their real office number
     console.log(`Phone: business hours, forwarding ${from} → ${forwardTo}`);
     return res.type('text/xml').send(twiml(
@@ -268,8 +272,8 @@ app.post('/api/phone/inbound', (req, res) => {
     ));
   }
 
-  // After hours / weekend — AI intake
-  console.log(`Phone: after hours intake from ${from}`);
+  // Always-on or after hours — AI intake
+  console.log(`Phone: AI intake (mode=${mode}) from ${from}`);
   phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone' });
   res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
 });

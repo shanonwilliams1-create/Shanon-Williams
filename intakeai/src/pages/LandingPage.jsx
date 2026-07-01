@@ -56,6 +56,10 @@ const PRACTICE_AREAS = [
 
 const FAQS = [
   {
+    q: 'Can IntakeAI fully replace our receptionist?',
+    a: 'Yes. IntakeAI can run 24 hours a day, 7 days a week — answering every call and chat, qualifying clients, and alerting attorneys instantly. Many firms use it as a complete receptionist replacement. A full-time receptionist costs $35,000–$50,000 per year plus benefits. IntakeAI starts at $250/month with no sick days, no vacation, and no missed calls.',
+  },
+  {
     q: 'What types of law firms use IntakeAI?',
     a: 'IntakeAI works for any practice area — personal injury, criminal defense, DUI/DWI, family law, immigration, workers\' compensation, bankruptcy, employment law, estate planning, medical malpractice, and more. If your firm takes client calls, IntakeAI can automate your intake.',
   },
@@ -86,7 +90,7 @@ const FAQS = [
 ];
 
 const TESTIMONIALS = [
-  { quote: 'We signed three new clients the first week — leads that came in after hours that we would have missed completely.', name: 'Rachel M.', firm: 'Managing Partner, Mercer Law Group' },
+  { quote: 'We replaced our front desk receptionist with IntakeAI. Same quality intake, a fraction of the cost — and it works at 2am.', name: 'Rachel M.', firm: 'Managing Partner, Mercer Law Group' },
   { quote: 'The urgency detection is incredible. I got a text at 11pm about a DUI arrest and called the client first thing in the morning.', name: 'David K.', firm: 'Criminal Defense Attorney' },
   { quote: 'Setup took one afternoon. Our intake volume doubled in 30 days.', name: 'Priya S.', firm: 'Family Law Practice' },
 ];
@@ -196,12 +200,13 @@ export default function LandingPage() {
             AI-powered intake — live in one day
           </div>
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold leading-tight mb-6 max-w-4xl mx-auto">
-            Turn Website Visitors Into<br />
-            <span className="text-violet-300">Qualified Legal Clients</span>
+            Replace Your Receptionist.<br />
+            <span className="text-violet-300">Never Miss a Client Again.</span>
           </h1>
           <p className="text-lg md:text-xl text-violet-100 mb-10 max-w-2xl mx-auto leading-relaxed">
-            IntakeAI captures, qualifies, and scores potential clients 24/7 via a smart chat widget —
-            then instantly alerts your attorney when a lead is hot or urgent.
+            IntakeAI answers every call and chat — day, night, weekends — qualifies the client,
+            scores urgency, and alerts your attorney instantly. A full-time receptionist costs $40,000/year.
+            IntakeAI starts at $250/month.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <a href="#demo"
@@ -342,6 +347,49 @@ export default function LandingPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Receptionist ROI ── */}
+      <section className="bg-indigo-950 py-16 text-white">
+        <div className="max-w-4xl mx-auto px-4 text-center">
+          <h2 className="text-2xl md:text-3xl font-bold mb-10">IntakeAI vs. a Full-Time Receptionist</h2>
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="bg-white/10 rounded-2xl p-8 border border-white/10">
+              <p className="text-lg font-bold text-red-300 mb-4">Full-Time Receptionist</p>
+              {[
+                ['Annual salary', '$35,000 – $50,000'],
+                ['Benefits & payroll tax', '+$10,000 – $15,000'],
+                ['Hours covered', '8 hours/day, 5 days/week'],
+                ['After-hours calls', 'Missed — goes to voicemail'],
+                ['Sick days / vacation', 'Yes'],
+              ].map(([k, v]) => (
+                <div key={k} className="flex justify-between text-sm py-2 border-b border-white/10">
+                  <span className="text-white/70">{k}</span>
+                  <span className="font-semibold text-white">{v}</span>
+                </div>
+              ))}
+            </div>
+            <div className="bg-violet-600 rounded-2xl p-8 border border-violet-400 relative">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full
+                              bg-yellow-400 text-yellow-900 text-xs font-bold whitespace-nowrap">
+                Save $40,000+ per year
+              </div>
+              <p className="text-lg font-bold text-yellow-300 mb-4">IntakeAI</p>
+              {[
+                ['Annual cost', '$3,000 – $9,000'],
+                ['Benefits & payroll tax', 'None'],
+                ['Hours covered', '24 hours/day, 7 days/week'],
+                ['After-hours calls', 'Answered instantly by AI'],
+                ['Sick days / vacation', 'Never'],
+              ].map(([k, v]) => (
+                <div key={k} className="flex justify-between text-sm py-2 border-b border-violet-500">
+                  <span className="text-violet-200">{k}</span>
+                  <span className="font-semibold text-white">{v}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>
