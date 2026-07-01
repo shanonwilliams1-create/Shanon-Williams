@@ -77,7 +77,7 @@ const FAQS = [
   },
   {
     q: 'How much does IntakeAI cost?',
-    a: 'Self-Serve is $250/month — no setup fee, cancel anytime. Managed is $200/month plus a one-time $500 setup retainer (first month: $700, then $200/month). Firm is $500/month — includes multiple attorney profiles, round-robin lead distribution, and a dedicated account manager. All plans include unlimited intakes and a 14-day free trial.',
+    a: 'Self-Serve is $250/month — no setup fee, cancel anytime. Managed is $200/month plus a one-time $500 setup retainer (first month: $700, then $200/month). Firm is $750/month plus a one-time $1,500 setup fee (first month: $2,250, then $750/month) — includes multiple attorney profiles, round-robin lead distribution, and a dedicated account manager. All plans include unlimited intakes and a 14-day free trial.',
   },
   {
     q: 'Can multiple attorneys share one IntakeAI account?',
@@ -436,10 +436,11 @@ export default function LandingPage() {
             <p className="font-bold text-xl text-gray-900 mb-1">Firm</p>
             <p className="text-sm text-gray-500 mb-6">Built for firms with multiple attorneys sharing leads.</p>
             <div className="flex items-end gap-1 mb-2">
-              <span className="text-4xl font-extrabold text-gray-900">$500</span>
+              <span className="text-4xl font-extrabold text-gray-900">$750</span>
               <span className="text-sm text-gray-500 mb-2">/month</span>
             </div>
-            <p className="text-xs text-gray-400 mb-8">Includes setup · Up to 10 attorneys</p>
+            <p className="text-xs text-gray-400 mb-1">+ $1,500 one-time setup fee</p>
+            <p className="text-xs text-gray-400 mb-8">First month total: $2,250 · Then $750/month</p>
             <ul className="space-y-3 mb-8 flex-1">
               {[
                 'Everything in Managed',
