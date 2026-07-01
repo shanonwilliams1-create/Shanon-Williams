@@ -125,8 +125,8 @@ function buildLeadAlertEmail({ lead, attorney, APP }) {
   const claimUrl  = `${APP}/claim/${lead.lead_token}/${attorney.attorney_token}`;
   const callUrl   = `tel:${(lead.phone || '').replace(/\D/g, '').replace(/^(\d{10})$/, '+1$1')}`;
   const smsUrl    = `sms:${(lead.phone || '').replace(/\D/g, '').replace(/^(\d{10})$/, '+1$1')}`;
-  const scoreColor = lead.score >= 80 ? '#dc2626' : lead.score >= 60 ? '#d97706' : '#16a34a';
-  const urgentBadge = lead.score >= 80 ? '<span style="background:#fef2f2;color:#dc2626;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:700;">🚨 URGENT</span>' : '';
+  const scoreColor = lead.score >= 8 ? '#dc2626' : lead.score >= 6 ? '#d97706' : '#16a34a';
+  const urgentBadge = lead.score >= 8 ? '<span style="background:#fef2f2;color:#dc2626;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:700;">🚨 URGENT</span>' : '';
 
   const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
@@ -272,15 +272,34 @@ const INTAKE_STEPS = [
 ];
 
 function scoreIntake(session) {
-  let score = 50;
-  const urgencyText = (session.urgency || '').toLowerCase();
+  const urgencyText = (session.urgency     || '').toLowerCase();
   const descText    = (session.description || '').toLowerCase();
-  const combined    = urgencyText + ' ' + descText;
-  if (/yes|urgent/i.test(urgencyText)) score += 20;
-  if (/arrest|dui|criminal|accident|injury|hospital/i.test(combined)) score += 15;
-  if (/court|deadline|tomorrow|today|tonight/i.test(combined)) score += 15;
-  if (session.phone) score += 5;
-  return Math.min(score, 100);
+  const caseText    = (session.caseType    || '').toLowerCase();
+  const combined    = urgencyText + ' ' + descText + ' ' + caseText;
+  let score = 5;
+
+  // Active / just-happened situations
+  if (/just happened|tonight|last night|right now|this morning|just arrested|just got|minutes ago|hours ago/.test(combined)) score += 2;
+  // High-stakes case types
+  if (/arrest|criminal|dui|dwi|domestic|violence|custody|kidnap|deport|traffick/.test(combined)) score += 2;
+  // Injury or accident
+  if (/accident|crash|wreck|injur|hospital|hurt|emergency|assault|attack/.test(combined)) score += 2;
+  // Hard deadlines
+  if (/court|deadline|tomorrow|hearing|trial|arraignment|sentencing|due date/.test(combined)) score += 1;
+  // Penalize very vague submissions
+  if (!session.caseType   || session.caseType.length   < 3) score -= 1;
+  if (!session.description || session.description.length < 8) score -= 1;
+
+  return Math.min(10, Math.max(1, score));
+}
+
+function detectDistress(speech) {
+  const lower = (speech || '').toLowerCase();
+  const emergency = /911|ambulance|dying|unconscious|not breathing|bleeding badly|heart attack|stroke|on fire|need help now|someone is hurt/.test(lower);
+  const crisis    = /accident|crash|wreck|just hit|arrested|jail|took my kids|he hit|she hit|domestic|been attacked|assault|i was just|scared|don't know what to do|please help|i need help/.test(lower);
+  const emotional = /crying|sobbing|terrified|desperate|overwhelmed|shaking|lost|confused|i don't know|don't know where|can't stop/.test(lower);
+  const fragmented = speech.trim().length < 12;
+  return { emergency, crisis, emotional, distressed: crisis || emotional || fragmented };
 }
 
 function parseIntakeInput(step, input, session) {
@@ -315,9 +334,9 @@ app.post('/api/intake/chat/message', async (req, res) => {
   if (done) {
     session.done = true;
     const score   = scoreIntake(session);
-    const urgent  = score >= 80;
+    const urgent  = score >= 8;
     const summary =
-      `New IntakeAI Lead (score: ${score}${urgent ? ' — URGENT' : ''})\n` +
+      `New IntakeAI Lead (score: ${score}/10${urgent ? ' — URGENT' : ''})\n` +
       `Name:        ${session.name}\n` +
       `Case Type:   ${session.caseType}\n` +
       `Description: ${session.description}\n` +
@@ -329,8 +348,8 @@ app.post('/api/intake/chat/message', async (req, res) => {
     console.log('\n── INTAKE LEAD ─────────────────\n' + summary + '\n────────────────────────────────');
     if (NOTIFY_EMAIL) {
       const subj = urgent
-        ? `🚨 URGENT IntakeAI Lead — ${session.caseType} (score ${score})`
-        : `New IntakeAI Lead — ${session.caseType} (score ${score})`;
+        ? `🚨 URGENT IntakeAI Lead — ${session.caseType} (score ${score}/10)`
+        : `New IntakeAI Lead — ${session.caseType} (score ${score}/10)`;
       await sendNotification(NOTIFY_EMAIL, subj, summary);
     }
   }
@@ -426,19 +445,46 @@ const PHONE_ROUTING_PROMPT = (name) =>
   `Hi ${name || 'there'}! Are you hoping to speak with an attorney, schedule an in-person appointment, or would you like to leave a voicemail message?`;
 
 // Path A — leave a message / intake for attorney follow-up
+// Prompts are functions so they can acknowledge what the caller just said
 const PHONE_INTAKE_STEPS = [
-  { field: 'caseType',    prompt: "What type of legal issue are you dealing with? For example — car accident, criminal charge, divorce, or immigration." },
-  { field: 'description', prompt: "Got it. Can you briefly describe what happened and when?" },
-  { field: 'urgency',     prompt: "Thank you. Is this time-sensitive? For example, do you have a court date coming up, were you recently arrested, or do you need help right away?" },
-  { field: 'email',       prompt: "Almost done. What email address should we send your case summary to?" },
+  {
+    field: 'caseType',
+    prompt: () => "I want to make sure you get the right help. Can you tell me what type of legal matter this is? For example — a car accident, a criminal charge, a divorce, or an immigration issue.",
+  },
+  {
+    field: 'description',
+    prompt: (session) => {
+      const lower = (session.caseType || '').toLowerCase();
+      if (/accident|crash|wreck|injur/.test(lower))
+        return `I'm sorry you're dealing with this. Take your time — can you briefly tell me what happened and when it occurred?`;
+      if (/arrest|criminal|dui|dwi/.test(lower))
+        return `Understood. Can you tell me a little about the situation — what happened and when?`;
+      if (/divorce|custody|family/.test(lower))
+        return `I understand this is a difficult time. Can you briefly describe the situation and when things began?`;
+      return `I understand. Can you briefly describe what happened and when?`;
+    },
+  },
+  {
+    field: 'urgency',
+    prompt: (session) => {
+      const lower = (session.description || '').toLowerCase();
+      if (/tonight|today|just|right now|this morning/.test(lower))
+        return `Thank you for sharing that. It sounds like this is very recent. Do you have a court date coming up, or is there any other deadline we should know about?`;
+      return `Thank you. Is this time-sensitive? For example, do you have a court date, were you recently arrested, or is there a deadline we need to know about?`;
+    },
+  },
+  {
+    field: 'email',
+    prompt: () => "Almost done — I just need one more thing. What email address should we send your case summary to so the attorney has everything when they reach out?",
+  },
 ];
 
 // Path B — schedule an in-person appointment
 const PHONE_APPT_STEPS = [
-  { field: 'apptDay',    prompt: "Of course! What day works best for you — for example, Monday, Wednesday, or Friday?" },
-  { field: 'apptTime',   prompt: "And do you prefer morning or afternoon?" },
-  { field: 'apptMatter', prompt: "Got it. In a few words, what will this appointment be about? For example, a car accident, divorce, or a criminal matter." },
-  { field: 'email',      prompt: "Last thing — what email should we send your appointment confirmation to?" },
+  { field: 'apptDay',    prompt: () => "Of course. What day works best for you — for example, Monday, Wednesday, or Friday?" },
+  { field: 'apptTime',   prompt: () => "And do you prefer morning or afternoon?" },
+  { field: 'apptMatter', prompt: () => "Got it. In just a few words, what will this appointment be about — for example, a car accident, divorce, or a criminal matter?" },
+  { field: 'email',      prompt: () => "Last thing — what email address should we send your appointment confirmation to?" },
 ];
 
 function isBusinessHours(tz = 'America/Chicago', open = '09:00', close = '17:00') {
@@ -1001,26 +1047,66 @@ app.post('/api/phone/gather', async (req, res) => {
   const v = session.voice || VOICE_FEMALE; // firm's chosen voice
   const gatherUrl = `/api/phone/gather?sid=${encodeURIComponent(callSid)}`;
 
+  // ── Emergency safety check — triggered any time alarming words are heard ──
+  if (session.phase === 'emergency_check') {
+    const lower = speech.toLowerCase();
+    const needsHelp = /yes|yeah|please|help|do|need|call|911|ambulance|hurt|dying|injury/.test(lower);
+    if (needsHelp) {
+      phoneSessions.delete(callSid);
+      return res.type('text/xml').send(twiml(
+        say(`Please hang up right now and call 911. Your safety is the only thing that matters. Please stay safe. We will be here when you are ready.`, v) +
+        '<Hangup/>'
+      ));
+    }
+    // They are safe — continue warmly to routing
+    session.phase = 'routing';
+    const safeResponse = `I am glad you are safe. Take a breath. You called the right place and I am going to make sure you get the help you need. ${PHONE_ROUTING_PROMPT(session.name)}`;
+    return res.type('text/xml').send(twiml(gather(gatherUrl, safeResponse, v)));
+  }
+
   // ── Intro: collect caller's name ──────────────────────────────────────────
   if (session.phase === 'intro') {
-    session.name  = speech.split(' ')[0] || speech;
+    session.name = speech.split(' ')[0] || speech;
+
+    // Check for emergency keywords even in the name response
+    const distress = detectDistress(speech);
+    if (distress.emergency) {
+      session.phase = 'emergency_check';
+      return res.type('text/xml').send(twiml(
+        gather(gatherUrl, `Before anything else — are you or anyone with you in immediate danger right now? Do you need emergency services?`, v)
+      ));
+    }
+
     session.phase = 'routing';
-    return res.type('text/xml').send(twiml(
-      gather(gatherUrl, PHONE_ROUTING_PROMPT(session.name), v)
-    ));
+    if (distress.distressed) {
+      // Slow down and acknowledge before routing
+      const warmOpening = `${session.name}, I am here and I am going to help you. Take a moment. There is no rush. ${PHONE_ROUTING_PROMPT(session.name)}`;
+      return res.type('text/xml').send(twiml(gather(gatherUrl, warmOpening, v)));
+    }
+    return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_ROUTING_PROMPT(session.name), v)));
   }
 
   // ── Routing: speak with attorney, book appointment, or leave voicemail ───
   if (session.phase === 'routing') {
     session.intent = speech;
     const lower = speech.toLowerCase();
+
+    // Emergency check at routing phase too
+    const distress = detectDistress(speech);
+    if (distress.emergency) {
+      session.phase = 'emergency_check';
+      return res.type('text/xml').send(twiml(
+        gather(gatherUrl, `I want to make sure you are safe first. Do you or anyone with you need emergency services right now?`, v)
+      ));
+    }
+
     const wantsVoicemail = /voicemail|leave.*message|message.*attorney|just.*message|can.*leave|leave a|message for/.test(lower);
     const wantsAppt = /appoint|schedul|meet|come in|visit|in.?person|office|see/.test(lower);
 
     if (wantsVoicemail) {
       session.phase = 'voicemail';
       const actionUrl = `/api/phone/recording-complete?token=${encodeURIComponent(session.clientToken || '')}&phone=${encodeURIComponent(session.phone || '')}&name=${encodeURIComponent(session.name || '')}&voice=${encodeURIComponent(v)}`;
-      const prompt = `Of course, ${session.name || 'there'}. Please leave your message after the tone. Press pound when finished, or simply hang up.`;
+      const prompt = `Of course, ${session.name || 'there'}. Please leave your message after the tone. Take as much time as you need. Press pound when finished, or simply hang up.`;
       phoneSessions.delete(callSid);
       return res.type('text/xml').send(twiml(
         say(prompt, v) +
@@ -1031,26 +1117,28 @@ app.post('/api/phone/gather', async (req, res) => {
     if (wantsAppt) {
       session.phase = 'appointment';
       session.step  = 0;
-      // Check all attorney calendars and find real open slots
       const primaryCal = session.attorneys?.find(a => a.calendar_url)?.calendar_url || null;
       const slots = await findAvailableSlots({
         calendarUrl: primaryCal,
-        tz:       session.firmTz    || 'America/Chicago',
-        workOpen: session.firmOpen  || '09:00',
+        tz:        session.firmTz    || 'America/Chicago',
+        workOpen:  session.firmOpen  || '09:00',
         workClose: session.firmClose || '17:00',
       });
       session.availableSlots = slots;
       if (slots.length > 0) {
         const opts = slots.map((s, i) => `Option ${i + 1}: ${s.label}`).join('. ');
-        const slotPrompt = `Great! I checked our schedule and have ${slots.length} open times for you: ${opts}. Which works best — just say option 1, 2, ${slots.length > 2 ? '3,' : ''} or another choice?`;
+        const slotPrompt = `I have ${slots.length} open times available for you: ${opts}. Which works best — just say option 1, 2, ${slots.length > 2 ? '3,' : ''} or another choice?`;
         return res.type('text/xml').send(twiml(gather(gatherUrl, slotPrompt, v)));
       }
-      // No calendar or fully booked — fall back to free-form
-      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_APPT_STEPS[0].prompt, v)));
+      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_APPT_STEPS[0].prompt(), v)));
     } else {
       session.phase = 'intake';
       session.step  = 0;
-      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTAKE_STEPS[0].prompt, v)));
+      // If they described a crisis while answering the routing question, capture it
+      if (distress.crisis || distress.emotional) {
+        session.distressed = true;
+      }
+      return res.type('text/xml').send(twiml(gather(gatherUrl, PHONE_INTAKE_STEPS[0].prompt(session), v)));
     }
   }
 
@@ -1058,13 +1146,23 @@ app.post('/api/phone/gather', async (req, res) => {
   if (session.phase === 'intake') {
     const steps = PHONE_INTAKE_STEPS;
     session[steps[session.step].field] = speech;
+
+    // Check for emergency at any point during intake
+    const distress = detectDistress(speech);
+    if (distress.emergency) {
+      session.phase = 'emergency_check';
+      return res.type('text/xml').send(twiml(
+        gather(gatherUrl, `I want to stop for a moment — do you or anyone with you need emergency services right now?`, v)
+      ));
+    }
+
     session.step += 1;
 
     if (session.step >= steps.length) {
       const score  = scoreIntake(session);
-      const urgent = score >= 80;
+      const urgent = score >= 8;
       const summary =
-        `New IntakeAI Phone Lead (score: ${score}${urgent ? ' — URGENT' : ''})\n` +
+        `New IntakeAI Phone Lead (score: ${score}/10${urgent ? ' — URGENT' : ''})\n` +
         `Name:        ${session.name}\n` +
         `Case Type:   ${session.caseType}\n` +
         `Description: ${session.description}\n` +
@@ -1074,13 +1172,6 @@ app.post('/api/phone/gather', async (req, res) => {
         `Source:      ${session.source || 'phone'}\n` +
         `Time:        ${new Date().toLocaleString()}`;
       console.log('\n── PHONE LEAD ──────────────────\n' + summary + '\n────────────────────────────────');
-      const notifyTargets = [...new Set([
-        ...(session.attorneys?.map(a => a.email).filter(Boolean) || []),
-        ...(NOTIFY_EMAIL ? [NOTIFY_EMAIL] : []),
-      ])];
-      const subj = urgent
-        ? `URGENT Phone Lead — ${session.caseType} (score ${score})`
-        : `New Phone Lead — ${session.caseType} (score ${score})`;
       await saveLead({
         client_token: session.clientToken, name: session.name, phone: session.phone,
         email: session.email, case_type: session.caseType, description: session.description,
@@ -1091,12 +1182,12 @@ app.post('/api/phone/gather', async (req, res) => {
       const holiday = getHolidayGreeting();
       const holidaySuffix = holiday ? ` ${holiday}!` : '';
       const closing = urgent
-        ? `Thank you, ${session.name}. Your case has been flagged as urgent. An attorney will contact you as soon as possible.${holidaySuffix} Goodbye.`
-        : `Thank you, ${session.name}. Your information has been submitted and an attorney will follow up within one business day.${holidaySuffix} Goodbye.`;
+        ? `Thank you, ${session.name}. I have flagged your case as urgent. An attorney will reach out to you as soon as possible — please keep your phone nearby. You did the right thing by calling.${holidaySuffix} Take care.`
+        : `Thank you, ${session.name}. Everything has been sent to the attorneys and someone will follow up with you within one business day. You are in good hands.${holidaySuffix} Take care.`;
       return res.type('text/xml').send(twiml(say(closing, v) + '<Hangup/>'));
     }
 
-    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt, v)));
+    return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt(session), v)));
   }
 
   // ── Appointment: schedule in-person visit ─────────────────────────────────
@@ -1138,7 +1229,7 @@ app.post('/api/phone/gather', async (req, res) => {
       session[steps[session.step].field] = speech;
       session.step += 1;
       if (session.step < steps.length) {
-        return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt, v)));
+        return res.type('text/xml').send(twiml(gather(gatherUrl, steps[session.step].prompt(), v)));
       }
       done = true;
     }
@@ -1149,7 +1240,7 @@ app.post('/api/phone/gather', async (req, res) => {
         client_token: session.clientToken, name: session.name, phone: session.phone,
         email: session.email, appt_day: session.apptDay, appt_time: session.apptTime,
         appt_matter: session.apptMatter, appt_slot: session.apptSlot || null,
-        score: 60, source: 'appointment',
+        score: 6, source: 'appointment',
         preferred_attorney: session.preferredAttorney || null, attorneys: session.attorneys || [],
       });
       phoneSessions.delete(callSid);
@@ -1157,9 +1248,9 @@ app.post('/api/phone/gather', async (req, res) => {
       const holidaySuffix = holiday ? ` ${holiday}!` : '';
       const slotConfirm = session.apptSlot
         ? `Your appointment is confirmed for ${session.apptDay}. A calendar invitation will be sent to ${session.email}.`
-        : `Your appointment request for ${session.apptDay || 'the time you requested'} has been submitted. The office will confirm with you at ${session.email} shortly.`;
+        : `Your appointment request for ${session.apptDay || 'the time you requested'} has been submitted. Someone will confirm with you at ${session.email} shortly.`;
       return res.type('text/xml').send(twiml(
-        say(`Thank you, ${session.name}. ${slotConfirm} We look forward to meeting you.${holidaySuffix} Goodbye.`, v) + '<Hangup/>'
+        say(`Thank you, ${session.name}. ${slotConfirm} We look forward to meeting you.${holidaySuffix} Take care.`, v) + '<Hangup/>'
       ));
     }
   }
