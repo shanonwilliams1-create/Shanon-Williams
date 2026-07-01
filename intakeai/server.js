@@ -212,6 +212,88 @@ app.post('/api/intake/chat/message', async (req, res) => {
   res.json({ message: reply, done, score: done ? scoreIntake(session) : undefined });
 });
 
+// ── Phone Intake (Twilio Voice) ───────────────────────────────────────────────
+const phoneSessions = new Map();
+
+function twiml(inner) {
+  return `<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`;
+}
+function say(text) {
+  return `<Say voice="Polly.Joanna">${text}</Say>`;
+}
+function gather(action, text) {
+  return (
+    `<Gather input="speech" action="${action}" method="POST" speechTimeout="3" language="en-US">` +
+    say(text) +
+    `</Gather>` +
+    say("Sorry, I didn't catch that.") +
+    `<Redirect method="POST">${action}</Redirect>`
+  );
+}
+
+const PHONE_STEPS = [
+  { field: null,          prompt: "Thank you for calling. I'm the virtual intake assistant. I'll collect a few quick details so an attorney can review your case. What's your name?" },
+  { field: 'name',        prompt: "Thank you. What type of legal issue are you dealing with? For example — car accident, criminal charge, divorce, or immigration." },
+  { field: 'caseType',    prompt: "Got it. Can you briefly describe what happened and when?" },
+  { field: 'description', prompt: "Thank you. Is this time-sensitive? For example, do you have a court date coming up, were you recently arrested, or do you need help right away?" },
+  { field: 'urgency',     prompt: "Almost done. What email address should we send your case summary to?" },
+  { field: 'email',       prompt: null },
+];
+
+app.post('/api/phone/inbound', (req, res) => {
+  const callSid = req.body?.CallSid;
+  const from    = req.body?.From || '';
+  if (!callSid) return res.status(400).send('Missing CallSid');
+  phoneSessions.set(callSid, { step: 0, phone: from, name: '', caseType: '', description: '', urgency: '', email: '', source: 'phone' });
+  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_STEPS[0].prompt)));
+});
+
+app.post('/api/phone/gather', async (req, res) => {
+  const callSid = req.query.sid;
+  const speech  = (req.body?.SpeechResult || '').trim();
+  const session = phoneSessions.get(callSid);
+
+  if (!session) {
+    return res.type('text/xml').send(
+      twiml(say("I'm sorry, your session expired. Please call back to start a new intake.") + '<Hangup/>')
+    );
+  }
+
+  const cur = PHONE_STEPS[session.step];
+  if (cur.field) session[cur.field] = speech;
+  session.step += 1;
+
+  if (session.step >= PHONE_STEPS.length - 1) {
+    const score  = scoreIntake(session);
+    const urgent = score >= 80;
+    const summary =
+      `New IntakeAI Phone Lead (score: ${score}${urgent ? ' — URGENT' : ''})\n` +
+      `Name:        ${session.name}\n` +
+      `Case Type:   ${session.caseType}\n` +
+      `Description: ${session.description}\n` +
+      `Urgency:     ${session.urgency}\n` +
+      `Phone:       ${session.phone}\n` +
+      `Email:       ${session.email}\n` +
+      `Source:      phone\n` +
+      `Time:        ${new Date().toLocaleString()}`;
+    console.log('\n── PHONE LEAD ──────────────────\n' + summary + '\n────────────────────────────────');
+    if (NOTIFY_EMAIL) {
+      const subj = urgent
+        ? `URGENT Phone Lead — ${session.caseType} (score ${score})`
+        : `New Phone Lead — ${session.caseType} (score ${score})`;
+      await sendNotification(NOTIFY_EMAIL, subj, summary);
+    }
+    phoneSessions.delete(callSid);
+    const closing = urgent
+      ? `Thank you, ${session.name}. Your case has been flagged as urgent. An attorney will contact you as soon as possible. Goodbye.`
+      : `Thank you, ${session.name}. Your intake has been submitted. An attorney will follow up within one business day. Goodbye.`;
+    return res.type('text/xml').send(twiml(say(closing) + '<Hangup/>'));
+  }
+
+  const next = PHONE_STEPS[session.step];
+  res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, next.prompt)));
+});
+
 // ── Stripe Checkout ───────────────────────────────────────────────────────────
 const STRIPE_SECRET          = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_PRICE_SELFSERVE = process.env.STRIPE_PRICE_SELFSERVE || '';

@@ -10,8 +10,8 @@ import SalesChatWidget from '../components/SalesChatWidget.jsx';
 const FEATURES = [
   {
     icon: MessageCircle,
-    title: '24 / 7 Intake Chat',
-    desc: 'A smart chat widget on your website answers potential clients at any hour — nights, weekends, holidays. Never miss a case again.',
+    title: '24 / 7 Intake — Chat & Phone',
+    desc: 'A smart chat widget on your website and an AI phone line answer potential clients at any hour — nights, weekends, holidays. Never miss a case again.',
   },
   {
     icon: BarChart2,
