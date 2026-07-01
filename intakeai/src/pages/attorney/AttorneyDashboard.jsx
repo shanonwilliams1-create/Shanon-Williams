@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Scale, LogOut, Phone, Mail, Globe, Clock, User,
-  AlertCircle, ChevronDown, RefreshCw, Shield, Trash2
+  AlertCircle, ChevronDown, RefreshCw, Shield, Trash2, Mic
 } from 'lucide-react';
 
 const URGENCY_COLOR = {
@@ -27,11 +27,19 @@ function timeAgo(ts) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function formatDuration(secs) {
+  const s = secs || 0;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m > 0 ? `${m}m ${r}s` : `${r}s`;
+}
+
 export default function AttorneyDashboard() {
   const nav = useNavigate();
   const [attorney, setAttorney]         = useState(null);
   const [leads, setLeads]               = useState([]);
   const [myLeads, setMyLeads]           = useState([]);
+  const [voicemails, setVoicemails]     = useState([]);
   const [loading, setLoading]           = useState(true);
   const [claiming, setClaiming]         = useState(null);
   const [error, setError]               = useState('');
@@ -67,6 +75,13 @@ export default function AttorneyDashboard() {
     }
   }, [nav]);
 
+  const fetchVoicemails = useCallback(async () => {
+    try {
+      const res = await fetch('/api/attorney/voicemails', { credentials: 'include' });
+      if (res.ok) setVoicemails((await res.json()).voicemails || []);
+    } catch {}
+  }, []);
+
   const fetchDevices = useCallback(async () => {
     const res = await fetch('/api/attorney/trusted-devices', { credentials: 'include' });
     if (res.ok) setDevices((await res.json()).devices || []);
@@ -75,13 +90,14 @@ export default function AttorneyDashboard() {
   useEffect(() => {
     fetchMe();
     fetchLeads();
-  }, [fetchMe, fetchLeads]);
+    fetchVoicemails();
+  }, [fetchMe, fetchLeads, fetchVoicemails]);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
-    const id = setInterval(fetchLeads, 30_000);
+    const id = setInterval(() => { fetchLeads(); fetchVoicemails(); }, 30_000);
     return () => clearInterval(id);
-  }, [fetchLeads]);
+  }, [fetchLeads, fetchVoicemails]);
 
   const claim = async (token) => {
     setClaiming(token);
@@ -102,6 +118,13 @@ export default function AttorneyDashboard() {
     }
   };
 
+  const markHeard = async (id) => {
+    try {
+      await fetch(`/api/attorney/voicemails/${id}/read`, { method: 'PATCH', credentials: 'include' });
+      setVoicemails(prev => prev.map(v => v.id === id ? { ...v, heard: true } : v));
+    } catch {}
+  };
+
   const revokeDevice = async (id) => {
     await fetch(`/api/attorney/trusted-devices/${id}`, {
       method: 'DELETE', credentials: 'include',
@@ -114,7 +137,8 @@ export default function AttorneyDashboard() {
     nav('/attorney/login');
   };
 
-  const displayLeads = tab === 'new' ? leads : myLeads;
+  const displayLeads  = tab === 'new' ? leads : myLeads;
+  const unheardCount  = voicemails.filter(v => !v.heard).length;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -201,18 +225,24 @@ export default function AttorneyDashboard() {
         <div className="flex items-center justify-between mb-4">
           <div className="flex gap-1 bg-gray-100 p-1 rounded-xl">
             {[
-              { id: 'new',  label: `New (${leads.length})` },
-              { id: 'mine', label: `My Leads (${myLeads.length})` },
+              { id: 'new',       label: `New (${leads.length})` },
+              { id: 'mine',      label: `My Leads (${myLeads.length})` },
+              { id: 'voicemail', label: 'Voicemail', badge: unheardCount },
             ].map(t => (
               <button key={t.id} onClick={() => setTab(t.id)}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
+                className={`relative px-4 py-1.5 rounded-lg text-sm font-semibold transition-all ${
                   tab === t.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                 }`}>
                 {t.label}
+                {t.badge > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                    {t.badge}
+                  </span>
+                )}
               </button>
             ))}
           </div>
-          <button onClick={fetchLeads}
+          <button onClick={() => { fetchLeads(); fetchVoicemails(); }}
             className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors">
             <RefreshCw size={12} />
             {timeAgo(lastRefresh)}
@@ -226,8 +256,75 @@ export default function AttorneyDashboard() {
           </div>
         )}
 
+        {/* Voicemail tab */}
+        {tab === 'voicemail' && (
+          voicemails.length === 0 ? (
+            <div className="text-center py-16">
+              <Mic size={32} className="mx-auto text-gray-300 mb-3" />
+              <p className="text-gray-400 text-sm">No voicemails yet. When callers leave a message it will appear here.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {voicemails.map(vm => (
+                <div key={vm.id}
+                  className={`bg-white rounded-2xl border shadow-sm overflow-hidden transition-all ${
+                    vm.heard ? 'border-gray-200' : 'border-violet-300 bg-violet-50/30'
+                  }`}>
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          vm.heard ? 'bg-gray-100' : 'bg-violet-100'
+                        }`}>
+                          <Mic size={16} className={vm.heard ? 'text-gray-400' : 'text-violet-600'} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="font-semibold text-gray-900">{vm.caller_name || 'Unknown caller'}</p>
+                            {!vm.heard && (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-violet-100 text-violet-700">New</span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-500">{vm.caller_phone || 'No number'}</p>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
+                            <span className="flex items-center gap-1"><Clock size={11} />{timeAgo(vm.created_at)}</span>
+                            <span>{formatDuration(vm.duration_seconds)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      {vm.caller_phone && (
+                        <a href={`tel:${vm.caller_phone}`}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-50 hover:bg-green-100 border border-green-200 text-green-700 text-sm font-medium rounded-lg transition-colors flex-shrink-0">
+                          <Phone size={13} />
+                          Call back
+                        </a>
+                      )}
+                    </div>
+
+                    {/* Audio player */}
+                    <div className="rounded-xl bg-gray-50 border border-gray-200 p-3">
+                      <p className="text-xs font-semibold text-gray-500 mb-2">Voicemail recording</p>
+                      <audio
+                        controls
+                        preload="none"
+                        className="w-full h-10"
+                        onPlay={() => { if (!vm.heard) markHeard(vm.id); }}
+                        src={`/api/attorney/voicemails/${vm.id}/audio`}
+                      />
+                    </div>
+
+                    {vm.heard && vm.heard_at && (
+                      <p className="text-xs text-gray-400 mt-2">Heard {timeAgo(vm.heard_at)}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        )}
+
         {/* Lead list */}
-        {loading ? (
+        {tab !== 'voicemail' && (loading ? (
           <div className="text-center py-16 text-gray-400 text-sm">Loading leads…</div>
         ) : displayLeads.length === 0 ? (
           <div className="text-center py-16">
@@ -392,7 +489,7 @@ export default function AttorneyDashboard() {
               );
             })}
           </div>
-        )}
+        ))}
       </main>
     </div>
   );

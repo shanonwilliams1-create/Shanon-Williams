@@ -15,6 +15,7 @@ const SENDGRID_KEY = process.env.SENDGRID_API_KEY || '';
 const FROM_EMAIL   = process.env.FROM_EMAIL || 'no-reply@intakeai.app';
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: false })); // Twilio webhooks send form-encoded POST
 
 // ── In-memory session stores ──────────────────────────────────────────────────
 const salesSessions  = new Map();
@@ -415,7 +416,7 @@ const PHONE_INTRO_PROMPT =
   "Thank you for calling. I'm the virtual intake assistant. Can I start with your name?";
 
 const PHONE_ROUTING_PROMPT = (name) =>
-  `Hi ${name || 'there'}! Are you hoping to speak with an attorney, or would you like to schedule an in-person appointment at the office?`;
+  `Hi ${name || 'there'}! Are you hoping to speak with an attorney, schedule an in-person appointment, or would you like to leave a voicemail message?`;
 
 // Path A — leave a message / intake for attorney follow-up
 const PHONE_INTAKE_STEPS = [
@@ -838,6 +839,81 @@ app.post('/api/phone/dial-fallback', (req, res) => {
   res.type('text/xml').send(twiml(gather(`/api/phone/gather?sid=${encodeURIComponent(callSid)}`, PHONE_INTRO_PROMPT)));
 });
 
+// POST /api/phone/recording-complete — Twilio calls this after <Record> finishes
+app.post('/api/phone/recording-complete', async (req, res) => {
+  const recordingUrl = req.body?.RecordingUrl  || '';
+  const recordingSid = req.body?.RecordingSid  || '';
+  const duration     = parseInt(req.body?.RecordingDuration) || 0;
+  const callerPhone  = req.query.phone || req.body?.From || '';
+  const callerName   = req.query.name  || '';
+  const clientToken  = req.query.token || '';
+  const firmVoice    = req.query.voice || VOICE_FEMALE;
+
+  console.log(`Voicemail: ${duration}s from ${callerPhone || 'unknown'} (${callerName || 'no name'})`);
+
+  // Respond to Twilio immediately — thank the caller and hang up
+  res.type('text/xml').send(twiml(
+    say(`Thank you${callerName ? `, ${callerName}` : ''}. Your message has been received and an attorney will get back to you as soon as possible. Goodbye.`, firmVoice) +
+    '<Hangup/>'
+  ));
+
+  // Save to DB and alert attorneys in the background
+  if (!recordingUrl || !clientToken || !dbPool) return;
+
+  try {
+    const vmToken = generateToken(16);
+    await dbPool.query(
+      `INSERT INTO intakeai_voicemails
+       (voicemail_token, client_token, caller_phone, caller_name, recording_url, recording_sid, duration_seconds)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [vmToken, clientToken, callerPhone, callerName, recordingUrl, recordingSid, duration]
+    );
+
+    const { rows: attorneys } = await dbPool.query(
+      `SELECT * FROM intakeai_attorneys WHERE client_token=$1 ORDER BY rotation_order ASC`, [clientToken]
+    );
+    const APP      = process.env.APP_URL || 'https://www.myintakeai.com';
+    const eligible = attorneys.filter(a => !SILENT_ROLES.has(a.role || 'associate'));
+
+    for (const atty of eligible.slice(0, 3)) {
+      if (!atty.email) continue;
+      const mins = Math.floor(duration / 60);
+      const secs = duration % 60;
+      const durLabel = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+      const html = `<div style="font-family:-apple-system,sans-serif;max-width:540px;margin:32px auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
+  <div style="background:linear-gradient(135deg,#7c3aed,#6d28d9);padding:24px 32px">
+    <div style="color:rgba(255,255,255,.8);font-size:12px;font-weight:600;letter-spacing:.5px">⚖️ INTAKEAI</div>
+    <h2 style="color:#fff;margin:8px 0 4px;font-size:20px">📞 New Voicemail</h2>
+    <p style="color:rgba(255,255,255,.8);margin:0;font-size:14px">From ${callerName || 'Unknown caller'} · ${callerPhone}</p>
+  </div>
+  <div style="padding:28px 32px">
+    <table style="font-size:14px;border-collapse:collapse;width:100%">
+      ${callerName ? `<tr><td style="padding:8px 0;color:#6b7280;width:120px">Caller</td><td style="padding:8px 0;color:#111827;font-weight:500">${callerName}</td></tr>` : ''}
+      ${callerPhone ? `<tr><td style="padding:8px 0;color:#6b7280">Phone</td><td style="padding:8px 0;color:#111827;font-weight:500">${callerPhone}</td></tr>` : ''}
+      <tr><td style="padding:8px 0;color:#6b7280">Duration</td><td style="padding:8px 0;color:#111827">${durLabel}</td></tr>
+      <tr><td style="padding:8px 0;color:#6b7280">Received</td><td style="padding:8px 0;color:#111827">${new Date().toLocaleString()}</td></tr>
+    </table>
+    <div style="margin-top:24px">
+      <a href="${APP}/attorney/dashboard" style="display:inline-block;background:#7c3aed;color:white;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:700;font-size:14px">▶ Listen on Dashboard</a>
+    </div>
+    <p style="margin-top:16px;font-size:12px;color:#9ca3af">Open the Voicemail tab in your attorney dashboard to listen to this message.</p>
+  </div>
+</div>`;
+      await sendHtmlEmail(
+        atty.email,
+        `📞 New Voicemail — ${callerName || callerPhone} (${durLabel})`,
+        html,
+        `New voicemail from ${callerName || callerPhone} (${durLabel}). Listen at ${APP}/attorney/dashboard`
+      );
+      if (atty.phone) {
+        await sendSMS(atty.phone, `📞 New voicemail from ${callerName || callerPhone} (${durLabel}). Listen: ${APP}/attorney/dashboard`);
+      }
+    }
+  } catch (e) {
+    console.error('recording-complete DB error:', e.message);
+  }
+});
+
 app.post('/api/phone/gather', async (req, res) => {
   const callSid = req.query.sid;
   const speech  = (req.body?.SpeechResult || '').trim();
@@ -861,11 +937,24 @@ app.post('/api/phone/gather', async (req, res) => {
     ));
   }
 
-  // ── Routing: speak with attorney or book in-person appointment ────────────
+  // ── Routing: speak with attorney, book appointment, or leave voicemail ───
   if (session.phase === 'routing') {
     session.intent = speech;
     const lower = speech.toLowerCase();
+    const wantsVoicemail = /voicemail|leave.*message|message.*attorney|just.*message|can.*leave|leave a|message for/.test(lower);
     const wantsAppt = /appoint|schedul|meet|come in|visit|in.?person|office|see/.test(lower);
+
+    if (wantsVoicemail) {
+      session.phase = 'voicemail';
+      const actionUrl = `/api/phone/recording-complete?token=${encodeURIComponent(session.clientToken || '')}&phone=${encodeURIComponent(session.phone || '')}&name=${encodeURIComponent(session.name || '')}&voice=${encodeURIComponent(v)}`;
+      const prompt = `Of course, ${session.name || 'there'}. Please leave your message after the tone. Press pound when finished, or simply hang up.`;
+      phoneSessions.delete(callSid);
+      return res.type('text/xml').send(twiml(
+        say(prompt, v) +
+        `<Record action="${actionUrl}" maxLength="180" finishOnKey="#" playBeep="true" timeout="5" />`
+      ));
+    }
+
     if (wantsAppt) {
       session.phase = 'appointment';
       session.step  = 0;
@@ -1530,7 +1619,7 @@ app.delete('/api/attorney/trusted-devices/:id', requireAttorneyAuth, async (req,
 
 // GET /api/attorney/leads — unclaimed leads + my claimed leads for this firm
 app.get('/api/attorney/leads', requireAttorneyAuth, async (req, res) => {
-  if (!dbPool) return res.json({ leads: [] });
+  if (!dbPool) return res.json({ available: [], mine: [] });
   try {
     const { rows } = await dbPool.query(
       `SELECT * FROM intakeai_leads
@@ -1538,8 +1627,10 @@ app.get('/api/attorney/leads', requireAttorneyAuth, async (req, res) => {
        ORDER BY score DESC, created_at DESC`,
       [req.attorney.client_token, req.attorney.attorney_token]
     );
+    const available = rows.filter(r => r.status === 'new');
+    const mine      = rows.filter(r => r.claimed_by === req.attorney.attorney_token);
     await auditLog(req.attorney.attorney_token, 'leads_viewed', null, req.ip, `${rows.length} leads`);
-    res.json({ leads: rows });
+    res.json({ available, mine });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1618,6 +1709,67 @@ app.get('/claim/:leadToken/:attorneyToken', async (req, res) => {
       </div></body></html>`);
   } catch (e) {
     res.status(500).send('Error: ' + e.message);
+  }
+});
+
+// ── Voicemail Routes ──────────────────────────────────────────────────────────
+
+// GET /api/attorney/voicemails — list all voicemails for this firm
+app.get('/api/attorney/voicemails', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.json({ voicemails: [] });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT id, voicemail_token, caller_phone, caller_name, duration_seconds, heard, heard_by, heard_at, created_at
+       FROM intakeai_voicemails WHERE client_token=$1 ORDER BY created_at DESC LIMIT 50`,
+      [req.attorney.client_token]
+    );
+    res.json({ voicemails: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/attorney/voicemails/:id/read — mark as heard
+app.patch('/api/attorney/voicemails/:id/read', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.json({ ok: true });
+  try {
+    await dbPool.query(
+      `UPDATE intakeai_voicemails SET heard=TRUE, heard_by=$1, heard_at=NOW()
+       WHERE id=$2 AND client_token=$3 AND heard=FALSE`,
+      [req.attorney.attorney_token, req.params.id, req.attorney.client_token]
+    );
+    await auditLog(req.attorney.attorney_token, 'voicemail_heard', req.params.id, req.ip);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/attorney/voicemails/:id/audio — proxy Twilio recording (keeps credentials server-side)
+app.get('/api/attorney/voicemails/:id/audio', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT recording_url FROM intakeai_voicemails WHERE id=$1 AND client_token=$2`,
+      [req.params.id, req.attorney.client_token]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    if (!rows[0].recording_url) return res.status(404).json({ error: 'No recording URL' });
+
+    const audioUrl = rows[0].recording_url + '.mp3';
+    const auth     = Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString('base64');
+    const r = await fetch(audioUrl, {
+      headers: { Authorization: `Basic ${auth}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!r.ok) return res.status(r.status).json({ error: 'Recording unavailable from Twilio' });
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    const buf = Buffer.from(await r.arrayBuffer());
+    res.send(buf);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -1995,6 +2147,22 @@ async function initDb() {
         attorney_token  TEXT NOT NULL,
         alerted_at      TIMESTAMPTZ DEFAULT NOW(),
         escalation_step INTEGER DEFAULT 0
+      )
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_voicemails (
+        id               SERIAL PRIMARY KEY,
+        voicemail_token  TEXT UNIQUE NOT NULL,
+        client_token     TEXT NOT NULL,
+        caller_phone     TEXT,
+        caller_name      TEXT,
+        recording_url    TEXT,
+        recording_sid    TEXT,
+        duration_seconds INTEGER DEFAULT 0,
+        heard            BOOLEAN DEFAULT FALSE,
+        heard_by         TEXT,
+        heard_at         TIMESTAMPTZ,
+        created_at       TIMESTAMPTZ DEFAULT NOW()
       )
     `);
     console.log('DB: all IntakeAI tables ready');
