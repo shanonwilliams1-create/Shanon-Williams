@@ -1,8 +1,11 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { scrypt, randomBytes, timingSafeEqual } from 'crypto';
+import { promisify } from 'util';
 import pg from 'pg';
 const { Pool } = pg;
+const scryptAsync = promisify(scrypt);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -37,6 +40,127 @@ async function sendNotification(to, subject, text) {
   } catch (e) {
     console.error('SendGrid error:', e.message);
   }
+}
+
+// ── Auth Utilities ────────────────────────────────────────────────────────────
+const TWILIO_SID   = process.env.TWILIO_ACCOUNT_SID  || '';
+const TWILIO_TOKEN = process.env.TWILIO_AUTH_TOKEN   || '';
+const TWILIO_FROM  = process.env.TWILIO_FROM_NUMBER  || '';
+
+async function hashPassword(plain) {
+  const salt = randomBytes(16).toString('hex');
+  const buf  = await scryptAsync(plain, salt, 64);
+  return `${buf.toString('hex')}.${salt}`;
+}
+async function verifyPassword(plain, stored) {
+  const [hashed, salt] = stored.split('.');
+  const buf     = await scryptAsync(plain, salt, 64);
+  const storedBuf = Buffer.from(hashed, 'hex');
+  return timingSafeEqual(buf, storedBuf);
+}
+function generateToken(bytes = 32) {
+  return randomBytes(bytes).toString('hex');
+}
+function generate6() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+function parseCookies(req) {
+  const out = {};
+  for (const part of (req.headers.cookie || '').split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k) out[k.trim()] = decodeURIComponent(v.join('='));
+  }
+  return out;
+}
+function setCookie(res, name, value, maxAgeSec, options = '') {
+  res.setHeader('Set-Cookie',
+    `${name}=${encodeURIComponent(value)}; Max-Age=${maxAgeSec}; Path=/; HttpOnly; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}${options}`
+  );
+}
+function clearCookie(res, name) {
+  res.setHeader('Set-Cookie', `${name}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict`);
+}
+
+async function sendSMS(to, body) {
+  if (!TWILIO_SID || !TWILIO_TOKEN || !TWILIO_FROM || !to) return false;
+  try {
+    const auth = Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString('base64');
+    const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
+      method: 'POST',
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ To: to, From: TWILIO_FROM, Body: body }).toString(),
+    });
+    return r.ok;
+  } catch (e) {
+    console.error('SMS error:', e.message);
+    return false;
+  }
+}
+
+async function sendHtmlEmail(to, subject, html, text) {
+  if (!SENDGRID_KEY || !to) return;
+  try {
+    const payload = {
+      personalizations: [{ to: [{ email: to }] }],
+      from: { email: FROM_EMAIL },
+      subject,
+      content: [
+        { type: 'text/plain', value: text || subject },
+        { type: 'text/html',  value: html },
+      ],
+    };
+    await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${SENDGRID_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    console.error('SendGrid HTML error:', e.message);
+  }
+}
+
+function buildLeadAlertEmail({ lead, attorney, APP }) {
+  const claimUrl  = `${APP}/claim/${lead.lead_token}/${attorney.attorney_token}`;
+  const callUrl   = `tel:${(lead.phone || '').replace(/\D/g, '').replace(/^(\d{10})$/, '+1$1')}`;
+  const smsUrl    = `sms:${(lead.phone || '').replace(/\D/g, '').replace(/^(\d{10})$/, '+1$1')}`;
+  const scoreColor = lead.score >= 80 ? '#dc2626' : lead.score >= 60 ? '#d97706' : '#16a34a';
+  const urgentBadge = lead.score >= 80 ? '<span style="background:#fef2f2;color:#dc2626;padding:2px 8px;border-radius:12px;font-size:12px;font-weight:700;">🚨 URGENT</span>' : '';
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+<div style="max-width:600px;margin:32px auto;background:white;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)">
+  <div style="background:linear-gradient(135deg,#7c3aed,#6d28d9);padding:24px 32px">
+    <div style="color:white;font-size:13px;font-weight:600;letter-spacing:.5px;opacity:.8">⚖️ INTAKEAI</div>
+    <h1 style="color:white;margin:8px 0 4px;font-size:22px">New ${lead.source === 'phone' ? 'Phone' : lead.source === 'appointment' ? 'Appointment Request' : 'Lead'} — ${lead.name || 'Unknown'}</h1>
+    <div style="color:rgba(255,255,255,.8);font-size:14px">${new Date(lead.created_at || Date.now()).toLocaleString()}</div>
+  </div>
+  <div style="padding:32px">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+      <span style="background:${scoreColor};color:white;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:700">Score: ${lead.score}</span>
+      ${urgentBadge}
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      ${lead.case_type ? `<tr><td style="padding:8px 0;color:#6b7280;width:120px">Case Type</td><td style="padding:8px 0;color:#111827;font-weight:500">${lead.case_type}</td></tr>` : ''}
+      ${lead.appt_day  ? `<tr><td style="padding:8px 0;color:#6b7280">Preferred Day</td><td style="padding:8px 0;color:#111827;font-weight:500">${lead.appt_day} ${lead.appt_time || ''}</td></tr>` : ''}
+      ${lead.description ? `<tr><td style="padding:8px 0;color:#6b7280;vertical-align:top">Description</td><td style="padding:8px 0;color:#111827">${lead.description}</td></tr>` : ''}
+      ${lead.urgency ? `<tr><td style="padding:8px 0;color:#6b7280;vertical-align:top">Urgency</td><td style="padding:8px 0;color:#111827">${lead.urgency}</td></tr>` : ''}
+      ${lead.phone  ? `<tr><td style="padding:8px 0;color:#6b7280">Phone</td><td style="padding:8px 0;color:#111827;font-weight:500">${lead.phone}</td></tr>` : ''}
+      ${lead.email  ? `<tr><td style="padding:8px 0;color:#6b7280">Email</td><td style="padding:8px 0;color:#111827">${lead.email}</td></tr>` : ''}
+      ${lead.preferred_attorney ? `<tr><td style="padding:8px 0;color:#6b7280">Requested</td><td style="padding:8px 0;color:#7c3aed;font-weight:500">Requested ${lead.preferred_attorney} specifically</td></tr>` : ''}
+    </table>
+    <div style="margin-top:28px;display:flex;gap:12px;flex-wrap:wrap">
+      ${lead.phone ? `<a href="${callUrl}" style="display:inline-block;background:#16a34a;color:white;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px">📞 Call Client</a>` : ''}
+      ${lead.phone ? `<a href="${smsUrl}" style="display:inline-block;background:#2563eb;color:white;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px">💬 Text Client</a>` : ''}
+      <a href="${claimUrl}" style="display:inline-block;background:#7c3aed;color:white;padding:12px 20px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px">✅ Claim This Lead</a>
+    </div>
+    <p style="margin-top:20px;font-size:12px;color:#9ca3af">Claiming stops escalation — the lead is yours. <a href="${APP}/attorney/dashboard" style="color:#7c3aed">View dashboard →</a></p>
+  </div>
+</div>
+</body></html>`;
+
+  const text = `New IntakeAI ${lead.source} Lead — ${lead.name}\nScore: ${lead.score}\nCase: ${lead.case_type || lead.appt_matter || ''}\nPhone: ${lead.phone}\nEmail: ${lead.email}\nClaim: ${claimUrl}`;
+  return { html, text };
 }
 
 // ── SALES BOT ─────────────────────────────────────────────────────────────────
@@ -634,7 +758,12 @@ app.post('/api/phone/gather', async (req, res) => {
       const subj = urgent
         ? `URGENT Phone Lead — ${session.caseType} (score ${score})`
         : `New Phone Lead — ${session.caseType} (score ${score})`;
-      for (const email of notifyTargets) await sendNotification(email, subj, summary);
+      await saveLead({
+        client_token: session.clientToken, name: session.name, phone: session.phone,
+        email: session.email, case_type: session.caseType, description: session.description,
+        urgency: session.urgency, score, source: session.source || 'phone',
+        preferred_attorney: session.preferredAttorney || null, attorneys: session.attorneys || [],
+      });
       phoneSessions.delete(callSid);
       const holiday = getHolidayGreeting();
       const holidaySuffix = holiday ? ` ${holiday}!` : '';
@@ -668,13 +797,12 @@ app.post('/api/phone/gather', async (req, res) => {
         ...(session.attorneys?.map(a => a.email).filter(Boolean) || []),
         ...(NOTIFY_EMAIL ? [NOTIFY_EMAIL] : []),
       ])];
-      for (const email of notifyTargets) {
-        await sendNotification(
-          email,
-          `Appointment Request — ${session.name} (${session.apptDay}, ${session.apptTime})`,
-          summary
-        );
-      }
+      await saveLead({
+        client_token: session.clientToken, name: session.name, phone: session.phone,
+        email: session.email, appt_day: session.apptDay, appt_time: session.apptTime,
+        appt_matter: session.apptMatter, score: 60, source: 'appointment',
+        preferred_attorney: session.preferredAttorney || null, attorneys: session.attorneys || [],
+      });
       phoneSessions.delete(callSid);
       const holiday2 = getHolidayGreeting();
       const holidaySuffix2 = holiday2 ? ` ${holiday2}!` : '';
@@ -687,6 +815,120 @@ app.post('/api/phone/gather', async (req, res) => {
 
   return res.type('text/xml').send(twiml(say("I'm sorry, something went wrong. Please call back.") + '<Hangup/>'));
 });
+
+// ── Save Lead & Alert Attorneys ───────────────────────────────────────────────
+async function saveLead(leadData) {
+  const APP = process.env.APP_URL || 'https://www.myintakeai.com';
+  const leadToken = generateToken(16);
+  const lead = { lead_token: leadToken, created_at: new Date().toISOString(), ...leadData };
+
+  if (dbPool) {
+    try {
+      await dbPool.query(
+        `INSERT INTO intakeai_leads
+         (lead_token, client_token, name, phone, email, case_type, description,
+          urgency, appt_day, appt_time, appt_matter, score, source, preferred_attorney)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [leadToken, leadData.client_token||null, leadData.name||null, leadData.phone||null,
+         leadData.email||null, leadData.case_type||null, leadData.description||null,
+         leadData.urgency||null, leadData.appt_day||null, leadData.appt_time||null,
+         leadData.appt_matter||null, leadData.score||50, leadData.source||'phone',
+         leadData.preferred_attorney||null]
+      );
+    } catch (e) {
+      console.error('saveLead DB error:', e.message);
+    }
+  }
+
+  // Alert attorneys with HTML email buttons
+  const attorneys = leadData.attorneys || [];
+  if (attorneys.length > 0 && dbPool) {
+    // If caller requested a specific attorney, only alert that one
+    const targets = leadData.preferred_attorney
+      ? attorneys.filter(a => a.name?.toLowerCase().includes(leadData.preferred_attorney.toLowerCase()))
+      : attorneys;
+    const alertList = targets.length > 0 ? targets : attorneys.slice(0, 1);
+
+    for (const [i, atty] of alertList.entries()) {
+      if (!atty.email) continue;
+      const { html, text } = buildLeadAlertEmail({ lead, attorney: atty, APP });
+      const urgent = (lead.score || 50) >= 80;
+      const subj = urgent
+        ? `🚨 URGENT — ${lead.name} needs help now (${lead.case_type || lead.appt_matter || 'appointment'})`
+        : `New ${lead.source === 'appointment' ? 'Appointment Request' : 'Lead'} — ${lead.name}`;
+      await sendHtmlEmail(atty.email, subj, html, text);
+
+      // Track for escalation
+      if (dbPool) {
+        await dbPool.query(
+          `INSERT INTO intakeai_lead_alerts (lead_token, attorney_token, escalation_step) VALUES ($1,$2,$3)`,
+          [leadToken, atty.attorney_token, i]
+        ).catch(() => {});
+      }
+
+      // SMS alert too (brief)
+      if (atty.phone) {
+        const smsText = urgent
+          ? `🚨 URGENT IntakeAI lead — ${lead.name} (${lead.case_type}). Claim: ${APP}/claim/${leadToken}/${atty.attorney_token}`
+          : `New lead — ${lead.name}. Call: ${lead.phone || 'no phone'}. Claim: ${APP}/claim/${leadToken}/${atty.attorney_token}`;
+        await sendSMS(atty.phone, smsText);
+      }
+    }
+  } else if (NOTIFY_EMAIL) {
+    // Fallback: no attorney list, notify owner
+    const fallbackAtty = { attorney_token: 'owner', name: 'Owner', email: NOTIFY_EMAIL };
+    const { html, text } = buildLeadAlertEmail({ lead, attorney: fallbackAtty, APP });
+    await sendHtmlEmail(NOTIFY_EMAIL, `New IntakeAI Lead — ${lead.name}`, html, text);
+  }
+
+  return leadToken;
+}
+
+// ── Lead Escalation Timer ──────────────────────────────────────────────────────
+// Runs every 60 seconds — escalates unclaimed leads to the next attorney in rotation
+setInterval(async () => {
+  if (!dbPool) return;
+  try {
+    // Find firms with unclaimed leads older than their escalation_minutes setting
+    const { rows: staleleads } = await dbPool.query(`
+      SELECT l.*, c.escalation_minutes
+      FROM intakeai_leads l
+      JOIN intakeai_clients c ON c.client_token = l.client_token
+      WHERE l.status = 'new'
+        AND l.created_at < NOW() - (c.escalation_minutes * interval '1 minute')
+        AND l.client_token IS NOT NULL
+    `);
+
+    for (const lead of staleleads) {
+      // Find all attorneys for this firm in order
+      const { rows: attorneys } = await dbPool.query(
+        `SELECT * FROM intakeai_attorneys WHERE client_token=$1 ORDER BY rotation_order ASC, id ASC`,
+        [lead.client_token]
+      );
+      // Find who's already been alerted
+      const { rows: alerted } = await dbPool.query(
+        `SELECT attorney_token FROM intakeai_lead_alerts WHERE lead_token=$1`,
+        [lead.lead_token]
+      );
+      const alertedTokens = new Set(alerted.map(a => a.attorney_token));
+      const next = attorneys.find(a => !alertedTokens.has(a.attorney_token));
+      if (!next) continue; // All attorneys already alerted
+
+      const APP = process.env.APP_URL || 'https://www.myintakeai.com';
+      const { html, text } = buildLeadAlertEmail({ lead, attorney: next, APP });
+      const subj = `⏰ Unclaimed Lead — ${lead.name} (${lead.case_type || 'appointment'}) — escalated`;
+      await sendHtmlEmail(next.email, subj, html, text);
+      if (next.phone) await sendSMS(next.phone, `Unclaimed lead — ${lead.name}. Claim: ${APP}/claim/${lead.lead_token}/${next.attorney_token}`);
+      await dbPool.query(
+        `INSERT INTO intakeai_lead_alerts (lead_token, attorney_token, escalation_step) VALUES ($1,$2,$3)`,
+        [lead.lead_token, next.attorney_token, alertedTokens.size]
+      );
+      console.log(`Escalation: lead ${lead.lead_token} → ${next.name}`);
+    }
+  } catch (e) {
+    console.error('Escalation timer error:', e.message);
+  }
+}, 60_000);
 
 // ── Onboarding ───────────────────────────────────────────────────────────────
 app.post('/api/onboarding/save', async (req, res) => {
@@ -716,11 +958,19 @@ app.post('/api/onboarding/save', async (req, res) => {
          forwardNumber, timezone, businessOpen, businessClose, callMode,
          attorneyName, attorneyEmail, attorneyPhone]
       );
-      // Create the attorney record so they get a live status toggle page
+      // Create attorney record (status page + call routing)
       await dbPool.query(
         `INSERT INTO intakeai_attorneys (attorney_token, client_token, name, phone, email, rotation_order, calendar_url)
          VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [attorneyToken, token, attorneyName || firmName, attorneyPhone || '', attorneyEmail || '', 0, calendarUrl || null]
+      );
+      // Create attorney dashboard account with a 48-hour password setup link
+      const resetToken   = generateToken();
+      const resetExpires = new Date(Date.now() + 48 * 3600 * 1000).toISOString();
+      await dbPool.query(
+        `INSERT INTO intakeai_attorney_accounts (attorney_token, reset_token, reset_expires) VALUES ($1,$2,$3)
+         ON CONFLICT (attorney_token) DO UPDATE SET reset_token=$2, reset_expires=$3`,
+        [attorneyToken, resetToken, resetExpires]
       );
     } catch (e) {
       console.error('Onboarding save error:', e.message);
@@ -738,6 +988,9 @@ Your ${plan} account is now active. Here are your setup details:
 FIRM: ${firmName}
 PLAN: ${plan}
 PRACTICE AREAS: ${Array.isArray(practiceAreas) ? practiceAreas.join(', ') : practiceAreas || 'Not specified'}
+
+SET UP YOUR DASHBOARD (link expires in 48 hours):
+${APP}/attorney/set-password?token=${resetToken}
 
 YOUR ATTORNEY STATUS PAGE (bookmark this on your phone):
 ${statusPageUrl}
@@ -775,6 +1028,335 @@ ${APP}`;
 
   console.log(`Onboarding complete: ${firmName} (${plan}) → ${attorneyEmail}`);
   res.json({ ok: true, token, attorneyToken, statusPageUrl });
+});
+
+// ── Attorney Auth Middleware & Helpers ────────────────────────────────────────
+async function auditLog(attorneyToken, action, resource, ip, detail) {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(
+      `INSERT INTO intakeai_audit_log (attorney_token, action, resource, ip_address, detail) VALUES ($1,$2,$3,$4,$5)`,
+      [attorneyToken, action, resource || null, ip || null, detail || null]
+    );
+  } catch {}
+}
+
+async function requireAttorneyAuth(req, res, next) {
+  const cookies = parseCookies(req);
+  const token   = cookies['atty_session'];
+  if (!token) return res.status(401).json({ error: 'Not authenticated' });
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT s.attorney_token, a.name, a.email, a.phone, a.client_token
+       FROM intakeai_sessions s
+       JOIN intakeai_attorneys a ON a.attorney_token = s.attorney_token
+       WHERE s.session_token=$1 AND s.expires_at > NOW()`,
+      [token]
+    );
+    if (!rows.length) return res.status(401).json({ error: 'Session expired' });
+    req.attorney = rows[0];
+    await auditLog(rows[0].attorney_token, 'access', req.path, req.ip);
+    next();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+// ── Attorney Auth Routes ──────────────────────────────────────────────────────
+
+// POST /api/attorney/login — step 1: email + password
+app.post('/api/attorney/login', async (req, res) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows: attyRows } = await dbPool.query(
+      `SELECT * FROM intakeai_attorneys WHERE LOWER(email)=LOWER($1)`, [email]
+    );
+    if (!attyRows.length) return res.status(401).json({ error: 'Invalid email or password' });
+    const atty = attyRows[0];
+
+    const { rows: accRows } = await dbPool.query(
+      `SELECT * FROM intakeai_attorney_accounts WHERE attorney_token=$1`, [atty.attorney_token]
+    );
+    if (!accRows.length || !accRows[0].password_hash)
+      return res.status(401).json({ error: 'Account not set up — check your welcome email for a setup link' });
+    const acc = accRows[0];
+
+    // Check lockout
+    if (acc.locked_until && new Date(acc.locked_until) > new Date())
+      return res.status(429).json({ error: 'Account locked — too many failed attempts. Try again in 15 minutes.' });
+
+    const ok = await verifyPassword(password, acc.password_hash);
+    if (!ok) {
+      const attempts = (acc.failed_attempts || 0) + 1;
+      const lockUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null;
+      await dbPool.query(
+        `UPDATE intakeai_attorney_accounts SET failed_attempts=$1, locked_until=$2 WHERE attorney_token=$3`,
+        [attempts, lockUntil, atty.attorney_token]
+      );
+      await auditLog(atty.attorney_token, 'login_failed', null, req.ip, `attempt ${attempts}`);
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+
+    // Reset failed attempts
+    await dbPool.query(
+      `UPDATE intakeai_attorney_accounts SET failed_attempts=0, locked_until=NULL WHERE attorney_token=$1`,
+      [atty.attorney_token]
+    );
+
+    // Check trusted device
+    const cookies = parseCookies(req);
+    const deviceToken = cookies['atty_device'];
+    if (deviceToken) {
+      const { rows: devRows } = await dbPool.query(
+        `SELECT * FROM intakeai_trusted_devices WHERE device_token=$1 AND attorney_token=$2 AND expires_at > NOW()`,
+        [deviceToken, atty.attorney_token]
+      );
+      if (devRows.length) {
+        // Trusted browser — skip 2FA, issue session
+        await dbPool.query(`UPDATE intakeai_trusted_devices SET last_used_at=NOW() WHERE device_token=$1`, [deviceToken]);
+        const sessionToken = generateToken();
+        const expires = new Date(Date.now() + 8 * 3600 * 1000).toISOString();
+        await dbPool.query(
+          `INSERT INTO intakeai_sessions (session_token, attorney_token, expires_at, ip_address) VALUES ($1,$2,$3,$4)`,
+          [sessionToken, atty.attorney_token, expires, req.ip]
+        );
+        await dbPool.query(`UPDATE intakeai_attorney_accounts SET last_login_at=NOW() WHERE attorney_token=$1`, [atty.attorney_token]);
+        setCookie(res, 'atty_session', sessionToken, 8 * 3600);
+        await auditLog(atty.attorney_token, 'login_trusted_device', null, req.ip);
+        return res.json({ ok: true, skip2fa: true, attorney: { name: atty.name, email: atty.email } });
+      }
+    }
+
+    // Send 2FA code
+    const code       = generate6();
+    const tempToken  = generateToken();
+    const codeExpiry = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    await dbPool.query(
+      `INSERT INTO intakeai_2fa_codes (temp_token, attorney_token, code, expires_at) VALUES ($1,$2,$3,$4)`,
+      [tempToken, atty.attorney_token, code, codeExpiry]
+    );
+
+    const smsSent = await sendSMS(atty.phone, `IntakeAI verification code: ${code}. Expires in 10 minutes.`);
+    if (!smsSent && SENDGRID_KEY) {
+      // Fallback: send code by email
+      await sendNotification(atty.email, 'IntakeAI — Your Login Code',
+        `Your IntakeAI login code is: ${code}\n\nThis code expires in 10 minutes. Do not share it with anyone.`
+      );
+    }
+
+    await auditLog(atty.attorney_token, 'login_2fa_sent', null, req.ip, smsSent ? 'sms' : 'email');
+    res.json({ requires2fa: true, tempToken, via: smsSent ? 'sms' : 'email', phone: atty.phone?.slice(-4) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/attorney/verify-2fa — step 2: submit code
+app.post('/api/attorney/verify-2fa', async (req, res) => {
+  const { tempToken, code, rememberDevice, deviceLabel } = req.body || {};
+  if (!tempToken || !code) return res.status(400).json({ error: 'tempToken and code required' });
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT * FROM intakeai_2fa_codes WHERE temp_token=$1 AND used=FALSE AND expires_at > NOW()`,
+      [tempToken]
+    );
+    if (!rows.length) return res.status(401).json({ error: 'Code expired or already used' });
+    const rec = rows[0];
+    if (rec.code !== String(code).trim())
+      return res.status(401).json({ error: 'Incorrect code' });
+
+    await dbPool.query(`UPDATE intakeai_2fa_codes SET used=TRUE WHERE temp_token=$1`, [tempToken]);
+
+    // Create session
+    const sessionToken = generateToken();
+    const expires      = new Date(Date.now() + 8 * 3600 * 1000).toISOString();
+    await dbPool.query(
+      `INSERT INTO intakeai_sessions (session_token, attorney_token, expires_at, ip_address) VALUES ($1,$2,$3,$4)`,
+      [sessionToken, rec.attorney_token, expires, req.ip]
+    );
+    await dbPool.query(`UPDATE intakeai_attorney_accounts SET last_login_at=NOW() WHERE attorney_token=$1`, [rec.attorney_token]);
+    setCookie(res, 'atty_session', sessionToken, 8 * 3600);
+
+    // Optionally trust this browser for 30 days
+    if (rememberDevice) {
+      const deviceToken = generateToken();
+      const devExpires  = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+      const ua = req.headers['user-agent'] || '';
+      const label = deviceLabel || (ua.includes('iPhone') ? 'iPhone' : ua.includes('Android') ? 'Android' : ua.includes('Mac') ? 'Mac' : 'Browser');
+      await dbPool.query(
+        `INSERT INTO intakeai_trusted_devices (device_token, attorney_token, label, expires_at) VALUES ($1,$2,$3,$4)`,
+        [deviceToken, rec.attorney_token, label, devExpires]
+      );
+      setCookie(res, 'atty_device', deviceToken, 30 * 24 * 3600);
+    }
+
+    const { rows: attyRows } = await dbPool.query(
+      `SELECT name, email FROM intakeai_attorneys WHERE attorney_token=$1`, [rec.attorney_token]
+    );
+    await auditLog(rec.attorney_token, 'login_success', null, req.ip, rememberDevice ? 'device_trusted' : null);
+    res.json({ ok: true, attorney: attyRows[0] || {} });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/attorney/logout
+app.post('/api/attorney/logout', async (req, res) => {
+  const cookies = parseCookies(req);
+  const token   = cookies['atty_session'];
+  if (token && dbPool) {
+    await dbPool.query(`DELETE FROM intakeai_sessions WHERE session_token=$1`, [token]).catch(() => {});
+  }
+  clearCookie(res, 'atty_session');
+  res.json({ ok: true });
+});
+
+// GET /api/attorney/me
+app.get('/api/attorney/me', requireAttorneyAuth, (req, res) => {
+  res.json({ attorney: req.attorney });
+});
+
+// POST /api/attorney/set-password — use reset token from welcome email
+app.post('/api/attorney/set-password', async (req, res) => {
+  const { resetToken, password } = req.body || {};
+  if (!resetToken || !password) return res.status(400).json({ error: 'resetToken and password required' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT * FROM intakeai_attorney_accounts WHERE reset_token=$1 AND reset_expires > NOW()`, [resetToken]
+    );
+    if (!rows.length) return res.status(401).json({ error: 'Reset link expired — contact support' });
+    const hash = await hashPassword(password);
+    await dbPool.query(
+      `UPDATE intakeai_attorney_accounts SET password_hash=$1, reset_token=NULL, reset_expires=NULL WHERE attorney_token=$2`,
+      [hash, rows[0].attorney_token]
+    );
+    await auditLog(rows[0].attorney_token, 'password_set', null, req.ip);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/attorney/trusted-devices
+app.get('/api/attorney/trusted-devices', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.json({ devices: [] });
+  const { rows } = await dbPool.query(
+    `SELECT id, label, last_used_at, expires_at FROM intakeai_trusted_devices WHERE attorney_token=$1 AND expires_at > NOW() ORDER BY last_used_at DESC`,
+    [req.attorney.attorney_token]
+  );
+  res.json({ devices: rows });
+});
+
+// DELETE /api/attorney/trusted-devices/:id
+app.delete('/api/attorney/trusted-devices/:id', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.json({ ok: true });
+  await dbPool.query(
+    `DELETE FROM intakeai_trusted_devices WHERE id=$1 AND attorney_token=$2`,
+    [req.params.id, req.attorney.attorney_token]
+  );
+  await auditLog(req.attorney.attorney_token, 'device_revoked', req.params.id, req.ip);
+  res.json({ ok: true });
+});
+
+// ── Attorney Leads Routes ─────────────────────────────────────────────────────
+
+// GET /api/attorney/leads — unclaimed leads + my claimed leads for this firm
+app.get('/api/attorney/leads', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.json({ leads: [] });
+  try {
+    const { rows } = await dbPool.query(
+      `SELECT * FROM intakeai_leads
+       WHERE client_token=$1 AND (status='new' OR claimed_by=$2)
+       ORDER BY score DESC, created_at DESC`,
+      [req.attorney.client_token, req.attorney.attorney_token]
+    );
+    await auditLog(req.attorney.attorney_token, 'leads_viewed', null, req.ip, `${rows.length} leads`);
+    res.json({ leads: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/attorney/leads/:token/claim
+app.post('/api/attorney/leads/:token/claim', requireAttorneyAuth, async (req, res) => {
+  if (!dbPool) return res.status(503).json({ error: 'No database' });
+  try {
+    const { rows } = await dbPool.query(
+      `UPDATE intakeai_leads SET status='claimed', claimed_by=$1, claimed_at=NOW()
+       WHERE lead_token=$2 AND client_token=$3 AND status='new'
+       RETURNING *`,
+      [req.attorney.attorney_token, req.params.token, req.attorney.client_token]
+    );
+    if (!rows.length) return res.status(409).json({ error: 'Lead already claimed or not found' });
+    await auditLog(req.attorney.attorney_token, 'lead_claimed', req.params.token, req.ip);
+    res.json({ ok: true, lead: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /claim/:leadToken/:attorneyToken — one-click claim from email button
+app.get('/claim/:leadToken/:attorneyToken', async (req, res) => {
+  if (!dbPool) return res.status(503).send('Service unavailable');
+  try {
+    const { rows: attyRows } = await dbPool.query(
+      `SELECT name FROM intakeai_attorneys WHERE attorney_token=$1`, [req.params.attorneyToken]
+    );
+    const attyName = attyRows[0]?.name || 'Attorney';
+
+    const { rows } = await dbPool.query(
+      `UPDATE intakeai_leads SET status='claimed', claimed_by=$1, claimed_at=NOW()
+       WHERE lead_token=$2 AND status='new'
+       RETURNING name, case_type, phone, score`,
+      [req.params.attorneyToken, req.params.leadToken]
+    );
+
+    const APP = process.env.APP_URL || 'https://www.myintakeai.com';
+    if (!rows.length) {
+      // Already claimed
+      const { rows: existing } = await dbPool.query(
+        `SELECT l.name, a.name as claimed_by_name FROM intakeai_leads l
+         LEFT JOIN intakeai_attorneys a ON a.attorney_token=l.claimed_by
+         WHERE l.lead_token=$1`, [req.params.leadToken]
+      );
+      const e = existing[0] || {};
+      return res.type('text/html').send(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>Lead Already Claimed</title>
+        <style>body{font-family:-apple-system,sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+        .card{background:white;border-radius:20px;padding:40px;max-width:400px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+        .icon{font-size:48px;margin-bottom:16px}</style></head>
+        <body><div class="card"><div class="icon">⚠️</div>
+        <h2 style="color:#111827">Already Claimed</h2>
+        <p style="color:#6b7280">The lead for <strong>${e.name || 'this client'}</strong> was already claimed${e.claimed_by_name ? ` by ${e.claimed_by_name}` : ''}.</p>
+        <a href="${APP}/attorney/dashboard" style="display:inline-block;margin-top:20px;background:#7c3aed;color:white;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600">View Dashboard</a>
+        </div></body></html>`);
+    }
+
+    await auditLog(req.params.attorneyToken, 'lead_claimed_email', req.params.leadToken, req.ip);
+    const lead = rows[0];
+    res.type('text/html').send(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      <title>Lead Claimed</title>
+      <style>body{font-family:-apple-system,sans-serif;background:#f3f4f6;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+      .card{background:white;border-radius:20px;padding:40px;max-width:400px;width:90%;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+      .icon{font-size:56px;margin-bottom:16px}</style></head>
+      <body><div class="card"><div class="icon">✅</div>
+      <h2 style="color:#16a34a">Lead Claimed!</h2>
+      <p style="color:#374151"><strong>${lead.name}</strong> — ${lead.case_type || 'appointment request'}</p>
+      <p style="color:#6b7280;font-size:14px">You've claimed this lead, ${attyName}. Other team members will no longer see it in their queue.</p>
+      ${lead.phone ? `<a href="tel:${lead.phone}" style="display:inline-block;margin-top:16px;background:#16a34a;color:white;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px">📞 Call ${lead.name} Now</a><br>` : ''}
+      <a href="${APP}/attorney/dashboard" style="display:inline-block;margin-top:12px;background:#7c3aed;color:white;padding:12px 24px;border-radius:10px;text-decoration:none;font-weight:600">View Dashboard</a>
+      </div></body></html>`);
+  } catch (e) {
+    res.status(500).send('Error: ' + e.message);
+  }
 });
 
 // ── Stripe Checkout ───────────────────────────────────────────────────────────
@@ -1053,8 +1635,101 @@ async function initDb() {
         calendar_url    TEXT
       )
     `);
-    // Add calendar_url to existing tables that were created before this column existed
     await dbPool.query(`ALTER TABLE intakeai_attorneys ADD COLUMN IF NOT EXISTS calendar_url TEXT`);
+    await dbPool.query(`ALTER TABLE intakeai_clients   ADD COLUMN IF NOT EXISTS escalation_minutes INTEGER DEFAULT 5`);
+
+    // ── Attorney auth tables ──────────────────────────────────────────────────
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_attorney_accounts (
+        id                    SERIAL PRIMARY KEY,
+        attorney_token        TEXT UNIQUE NOT NULL,
+        password_hash         TEXT,
+        reset_token           TEXT,
+        reset_expires         TIMESTAMPTZ,
+        failed_attempts       INTEGER DEFAULT 0,
+        locked_until          TIMESTAMPTZ,
+        last_login_at         TIMESTAMPTZ,
+        created_at            TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_sessions (
+        id              SERIAL PRIMARY KEY,
+        session_token   TEXT UNIQUE NOT NULL,
+        attorney_token  TEXT NOT NULL,
+        expires_at      TIMESTAMPTZ NOT NULL,
+        ip_address      TEXT,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_2fa_codes (
+        id              SERIAL PRIMARY KEY,
+        temp_token      TEXT UNIQUE NOT NULL,
+        attorney_token  TEXT NOT NULL,
+        code            TEXT NOT NULL,
+        expires_at      TIMESTAMPTZ NOT NULL,
+        used            BOOLEAN DEFAULT FALSE,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_trusted_devices (
+        id              SERIAL PRIMARY KEY,
+        device_token    TEXT UNIQUE NOT NULL,
+        attorney_token  TEXT NOT NULL,
+        label           TEXT,
+        expires_at      TIMESTAMPTZ NOT NULL,
+        last_used_at    TIMESTAMPTZ DEFAULT NOW(),
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_audit_log (
+        id              SERIAL PRIMARY KEY,
+        attorney_token  TEXT NOT NULL,
+        action          TEXT NOT NULL,
+        resource        TEXT,
+        ip_address      TEXT,
+        detail          TEXT,
+        created_at      TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // ── Leads & escalation tables ─────────────────────────────────────────────
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_leads (
+        id                 SERIAL PRIMARY KEY,
+        lead_token         TEXT UNIQUE NOT NULL,
+        client_token       TEXT,
+        name               TEXT,
+        phone              TEXT,
+        email              TEXT,
+        case_type          TEXT,
+        description        TEXT,
+        urgency            TEXT,
+        appt_day           TEXT,
+        appt_time          TEXT,
+        appt_matter        TEXT,
+        score              INTEGER DEFAULT 50,
+        source             TEXT,
+        preferred_attorney TEXT,
+        status             TEXT DEFAULT 'new',
+        claimed_by         TEXT,
+        claimed_at         TIMESTAMPTZ,
+        created_at         TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS intakeai_lead_alerts (
+        id              SERIAL PRIMARY KEY,
+        lead_token      TEXT NOT NULL,
+        attorney_token  TEXT NOT NULL,
+        alerted_at      TIMESTAMPTZ DEFAULT NOW(),
+        escalation_step INTEGER DEFAULT 0
+      )
+    `);
+    console.log('DB: all IntakeAI tables ready');
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS intakeai_firms (
         id           SERIAL PRIMARY KEY,
