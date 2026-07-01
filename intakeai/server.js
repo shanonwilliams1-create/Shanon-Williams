@@ -210,6 +210,63 @@ app.post('/api/intake/chat/message', async (req, res) => {
   res.json({ message: reply, done, score: done ? scoreIntake(session) : undefined });
 });
 
+// ── Stripe Checkout ───────────────────────────────────────────────────────────
+const STRIPE_SECRET          = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_PRICE_SELFSERVE = process.env.STRIPE_PRICE_SELFSERVE || '';
+const STRIPE_PRICE_MANAGED   = process.env.STRIPE_PRICE_MANAGED || '';
+const STRIPE_PRICE_SETUP     = process.env.STRIPE_PRICE_MANAGED_SETUP || '';
+const APP_URL = process.env.APP_URL || 'https://leadforge-production-3ee8.up.railway.app';
+
+app.post('/api/stripe/checkout', async (req, res) => {
+  const { plan } = req.body || {};
+  if (!STRIPE_SECRET) {
+    return res.status(503).json({ error: 'not_configured' });
+  }
+
+  try {
+    const params = {
+      mode: 'subscription',
+      success_url: `${APP_URL}/?checkout=success`,
+      cancel_url: `${APP_URL}/#pricing`,
+      allow_promotion_codes: 'true',
+      'billing_address_collection': 'required',
+    };
+
+    if (plan === 'selfserve') {
+      if (!STRIPE_PRICE_SELFSERVE) return res.status(503).json({ error: 'price_not_configured' });
+      params['line_items[0][price]']    = STRIPE_PRICE_SELFSERVE;
+      params['line_items[0][quantity]'] = '1';
+    } else if (plan === 'managed') {
+      if (!STRIPE_PRICE_MANAGED) return res.status(503).json({ error: 'price_not_configured' });
+      params['line_items[0][price]']    = STRIPE_PRICE_MANAGED;
+      params['line_items[0][quantity]'] = '1';
+      if (STRIPE_PRICE_SETUP) {
+        params['subscription_data[add_invoice_items][0][price]']    = STRIPE_PRICE_SETUP;
+        params['subscription_data[add_invoice_items][0][quantity]'] = '1';
+      }
+    } else {
+      return res.status(400).json({ error: 'Plan must be "selfserve" or "managed"' });
+    }
+
+    const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${STRIPE_SECRET}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams(params).toString(),
+    });
+
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error?.message || 'Stripe error');
+    console.log(`Stripe session created: ${plan} → ${data.url}`);
+    res.json({ url: data.url });
+  } catch (e) {
+    console.error('Stripe checkout error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Outbound Email Sender ─────────────────────────────────────────────────────
 const FROM_NAME = process.env.FROM_NAME || 'Shanon Williams';
 

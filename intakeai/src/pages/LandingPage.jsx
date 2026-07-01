@@ -109,13 +109,47 @@ function FaqItem({ q, a }) {
 }
 
 export default function LandingPage() {
-  const [salesOpen, setSalesOpen] = useState(false);
-  const [salesPlan, setSalesPlan] = useState(null);
+  const [salesOpen, setSalesOpen]   = useState(false);
+  const [salesPlan, setSalesPlan]   = useState(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(null);
+  const [checkoutBanner, setCheckoutBanner]   = useState(
+    () => new URLSearchParams(window.location.search).get('checkout') === 'success'
+  );
 
   const openSales = (plan) => { setSalesPlan(plan); setSalesOpen(true); };
 
+  const startCheckout = async (plan) => {
+    setCheckoutLoading(plan);
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        // Stripe not configured yet — fall back to sales chat
+        openSales(plan);
+      }
+    } catch {
+      openSales(plan);
+    } finally {
+      setCheckoutLoading(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white text-gray-900 font-sans">
+
+      {/* ── Checkout success banner ── */}
+      {checkoutBanner && (
+        <div className="bg-green-600 text-white text-sm font-medium px-4 py-3 flex items-center justify-between">
+          <span>🎉 Payment confirmed — welcome to IntakeAI! Our team will reach out within one business day to get you set up.</span>
+          <button onClick={() => setCheckoutBanner(false)} className="ml-4 text-white/70 hover:text-white">✕</button>
+        </div>
+      )}
 
       {/* ── Nav ── */}
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-gray-100">
@@ -339,10 +373,14 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <button onClick={() => openSales('self_serve')}
+            <button onClick={() => startCheckout('selfserve')}
+                    disabled={checkoutLoading === 'selfserve'}
                     className="w-full py-3.5 rounded-xl font-semibold text-sm
-                               bg-violet-600 text-white hover:bg-violet-700 transition-colors">
-              Get Started — No Retainer
+                               bg-violet-600 text-white hover:bg-violet-700
+                               disabled:opacity-70 transition-colors flex items-center justify-center gap-2">
+              {checkoutLoading === 'selfserve'
+                ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Redirecting…</>
+                : 'Get Started — No Retainer'}
             </button>
           </div>
 
@@ -374,10 +412,14 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <button onClick={() => openSales('managed')}
+            <button onClick={() => startCheckout('managed')}
+                    disabled={checkoutLoading === 'managed'}
                     className="w-full py-3.5 rounded-xl font-semibold text-sm
-                               bg-white text-violet-700 hover:bg-violet-50 transition-colors">
-              Get Started — Managed Setup
+                               bg-white text-violet-700 hover:bg-violet-50
+                               disabled:opacity-70 transition-colors flex items-center justify-center gap-2">
+              {checkoutLoading === 'managed'
+                ? <><span className="w-4 h-4 border-2 border-violet-300 border-t-violet-700 rounded-full animate-spin" /> Redirecting…</>
+                : 'Get Started — Managed Setup'}
             </button>
           </div>
 
