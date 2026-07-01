@@ -1,6 +1,7 @@
 """
 LeadForge — Application Configuration
 """
+import os
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from typing import List
@@ -15,7 +16,7 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     # ── Database ─────────────────────────────────────────────────────
-    database_url: str = "sqlite+aiosqlite:///./leadforge.db"
+    database_url: str = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./leadforge.db")
 
     @field_validator("database_url", mode="before")
     @classmethod
