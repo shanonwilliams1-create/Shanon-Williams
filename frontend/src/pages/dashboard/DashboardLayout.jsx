@@ -103,10 +103,9 @@ export default function DashboardLayout() {
           <div className="text-sm text-gray-500">
             LeadForge Dashboard
           </div>
-          <button className="relative p-2 text-gray-400 hover:text-gray-600">
+          <div className="text-gray-400">
             <Bell size={20} />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
-          </button>
+          </div>
         </header>
 
         {/* Page content */}
